@@ -124,7 +124,7 @@ const sendToSteadfast = async (order: Order, apiKey: string, secretKey: string) 
     recipient_name: order.customerName,
     recipient_address: order.shippingAddress,
     recipient_phone: order.customerPhone,
-    cod_amount: String(order.total), // Sending as string to avoid potential type issues on the server
+    cod_amount: order.total, // Reverted to number, as API likely expects a numeric type for currency.
     note: `Order from E-commerce Manager App. Total items: ${order.items.length}`,
   };
 
@@ -185,7 +185,7 @@ const sendToPathao = async (order: Order, accessToken: string, storeId: string) 
     recipient_name: order.customerName,
     recipient_address: order.shippingAddress,
     recipient_phone: order.customerPhone,
-    amount_to_collect: String(order.total), // Sending as string to avoid potential type issues
+    amount_to_collect: order.total, // Reverted to number, as API likely expects a numeric type.
     item_quantity: order.items.reduce((sum, item) => sum + item.quantity, 0),
     item_weight: 0.5, // Default weight in kg, adjust as needed
     item_description: order.items.map(i => i.name).join(', '),
