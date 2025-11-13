@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { Order, OrderStatus, CustomerHistory, Courier } from '../types';
 import { fetchCourierCustomerHistory, sendToCourier } from '../services/orderService';
 
@@ -80,6 +80,20 @@ const OrderDetailModal: React.FC<OrderDetailModalProps> = ({ order, onClose, onU
             .finally(() => setIsPathaoHistoryLoading(false));
     }
   }, [order.customerPhone]);
+
+  const totalHistory = useMemo(() => {
+    if (!steadfastHistory && !pathaoHistory) {
+        return null;
+    }
+    const total = {
+        totalParcels: (steadfastHistory?.totalParcels || 0) + (pathaoHistory?.totalParcels || 0),
+        delivered: (steadfastHistory?.delivered || 0) + (pathaoHistory?.delivered || 0),
+        returned: (steadfastHistory?.returned || 0) + (pathaoHistory?.returned || 0),
+        pending: (steadfastHistory?.pending || 0) + (pathaoHistory?.pending || 0),
+    };
+    // Only return the total object if there are any parcels to show
+    return total.totalParcels > 0 ? total : null;
+  }, [steadfastHistory, pathaoHistory]);
   
   const handleSendToCourier = async () => {
     let courierConfig = {};
@@ -210,6 +224,23 @@ const OrderDetailModal: React.FC<OrderDetailModalProps> = ({ order, onClose, onU
                               </div>
                           ) : null}
                       </div>
+                      
+                      {totalHistory && (
+                        <>
+                          <hr className="border-gray-200 dark:border-gray-600" />
+                          <div>
+                              <div className="flex items-center justify-between">
+                                  <h5 className="font-semibold text-gray-700 dark:text-gray-300">Total Record</h5>
+                              </div>
+                              <div className="mt-1 grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
+                                  <p>Total: <span className="font-bold">{totalHistory.totalParcels}</span></p>
+                                  <p>Delivered: <span className="font-bold text-green-500">{totalHistory.delivered}</span></p>
+                                  <p>Pending: <span className="font-bold text-yellow-500">{totalHistory.pending}</span></p>
+                                  <p>Returned: <span className="font-bold text-red-500">{totalHistory.returned}</span></p>
+                              </div>
+                          </div>
+                        </>
+                      )}
                   </div>
               </div>
             </div>
