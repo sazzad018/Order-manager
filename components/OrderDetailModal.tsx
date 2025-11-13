@@ -1,11 +1,12 @@
-import React, { useState } from 'react';
-import { Order, OrderStatus, CustomerHistory } from '../types';
-import { fetchCustomerHistory } from '../services/orderService';
+import React, { useState, useEffect } from 'react';
+import { Order, OrderStatus, CustomerHistory, Courier } from '../types';
+import { fetchCourierCustomerHistory, sendToCourier } from '../services/orderService';
 
 interface OrderDetailModalProps {
   order: Order;
   onClose: () => void;
   onUpdateStatus: (orderId: string, status: OrderStatus) => void;
+  onOrderBooked: (orderId: string, courier: Courier, trackingId: string) => void;
 }
 
 const statusColors: { [key in OrderStatus]: string } = {
@@ -16,30 +17,107 @@ const statusColors: { [key in OrderStatus]: string } = {
   [OrderStatus.Cancelled]: 'bg-red-100 text-red-800 dark:bg-red-900/50 dark:text-red-300',
 };
 
-const OrderDetailModal: React.FC<OrderDetailModalProps> = ({ order, onClose, onUpdateStatus }) => {
+// A simple spinner component for loading states
+const Spinner: React.FC<{className?: string}> = ({className}) => (
+  <svg className={`animate-spin h-5 w-5 ${className}`} xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+  </svg>
+);
+
+
+const OrderDetailModal: React.FC<OrderDetailModalProps> = ({ order, onClose, onUpdateStatus, onOrderBooked }) => {
   const [history, setHistory] = useState<CustomerHistory | null>(null);
   const [isHistoryLoading, setIsHistoryLoading] = useState(false);
   const [historyError, setHistoryError] = useState<string | null>(null);
-
-  const siteUrl = localStorage.getItem('siteUrl');
-  const apiKey = localStorage.getItem('apiKey');
+  const [historyCourier, setHistoryCourier] = useState<Courier>(Courier.Steadfast);
   
+  // State for the courier booking feature
+  const [courierStatus, setCourierStatus] = useState<'idle' | 'sending' | 'sent' | 'error'>('idle');
+  const [courierMessage, setCourierMessage] = useState('');
+  const [selectedCourier, setSelectedCourier] = useState<Courier>(Courier.Steadfast);
+  
+  // Courier API Config State
+  const [steadfastApiKey, setSteadfastApiKey] = useState<string|null>(null);
+  const [steadfastSecretKey, setSteadfastSecretKey] = useState<string|null>(null);
+  const [pathaoApiKey, setPathaoApiKey] = useState<string|null>(null);
+  const [pathaoStoreId, setPathaoStoreId] = useState<string|null>(null);
+
+  useEffect(() => {
+    // Load all courier configs from localStorage when the modal opens
+    setSteadfastApiKey(localStorage.getItem('steadfastApiKey'));
+    setSteadfastSecretKey(localStorage.getItem('steadfastSecretKey'));
+    setPathaoApiKey(localStorage.getItem('pathaoApiKey'));
+    setPathaoStoreId(localStorage.getItem('pathaoStoreId'));
+  }, []);
+
   const handleViewHistory = async () => {
-    if (!siteUrl || !apiKey) return;
     setIsHistoryLoading(true);
     setHistoryError(null);
+    setHistory(null); // Clear previous history on new request
+
+    let courierConfig = {};
+    if (historyCourier === Courier.Steadfast) {
+      courierConfig = { apiKey: steadfastApiKey, secretKey: steadfastSecretKey };
+    } else { // Pathao
+      // For history check, we might only need the token, but we pass the whole config for flexibility
+      courierConfig = { apiKey: pathaoApiKey, storeId: pathaoStoreId };
+    }
+
     try {
-      const historyData = await fetchCustomerHistory(order.customerEmail, siteUrl, apiKey);
+      const historyData = await fetchCourierCustomerHistory(order.customerPhone, historyCourier, courierConfig);
       setHistory(historyData);
     } catch (error) {
-      setHistoryError('Could not load customer history.');
+      setHistoryError(error instanceof Error ? error.message : 'Could not load customer history.');
       console.error(error);
     } finally {
       setIsHistoryLoading(false);
     }
   };
   
-  const canShip = order.status === OrderStatus.Pending || order.status === OrderStatus.Processing;
+  const handleSendToCourier = async () => {
+    let courierConfig = {};
+    if (selectedCourier === Courier.Steadfast) {
+      courierConfig = { apiKey: steadfastApiKey, secretKey: steadfastSecretKey };
+    } else if (selectedCourier === Courier.Pathao) {
+      courierConfig = { apiKey: pathaoApiKey, storeId: pathaoStoreId };
+    }
+
+    setCourierStatus('sending');
+    setCourierMessage('');
+    try {
+      const result = await sendToCourier(order, selectedCourier, courierConfig);
+      if (result.success) {
+        setCourierStatus('sent');
+        setCourierMessage(result.message);
+        onOrderBooked(order.id, selectedCourier, result.trackingId);
+        if (order.status === OrderStatus.Pending) {
+          onUpdateStatus(order.id, OrderStatus.Processing);
+        }
+      } else {
+        setCourierStatus('error');
+        setCourierMessage(result.message);
+      }
+    } catch (err) {
+      setCourierStatus('error');
+      setCourierMessage('An unexpected error occurred.');
+      console.error(err);
+    }
+  };
+
+  const isBooked = !!order.courier;
+  
+  const isBookingConfigMissing = selectedCourier === Courier.Steadfast
+    ? !steadfastApiKey || !steadfastSecretKey
+    : !pathaoApiKey || !pathaoStoreId;
+
+  const missingBookingConfigMessage = selectedCourier === Courier.Steadfast
+    ? "Please add an API Key and Secret Key for Steadfast in the Settings."
+    : "Please add an Access Token and Store ID for Pathao in the Settings.";
+
+  const isHistoryConfigMissing = historyCourier === Courier.Steadfast
+    ? !steadfastApiKey || !steadfastSecretKey
+    : !pathaoApiKey; // Pathao history check might only need the access token
 
   return (
     <div 
@@ -76,27 +154,49 @@ const OrderDetailModal: React.FC<OrderDetailModalProps> = ({ order, onClose, onU
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             <div>
               <h3 className="font-semibold text-lg mb-2 text-gray-800 dark:text-gray-200">Customer Details</h3>
-              <div className="flex items-center gap-4">
-                 <p><strong>Name:</strong> {order.customerName}</p>
-                 <button onClick={handleViewHistory} className="text-xs text-indigo-600 dark:text-indigo-400 hover:underline">View History</button>
-              </div>
+              <p><strong>Name:</strong> {order.customerName}</p>
               <p><strong>Email:</strong> {order.customerEmail}</p>
               <p><strong>Phone:</strong> {order.customerPhone}</p>
               
-              {isHistoryLoading && <p className="text-sm mt-2">Loading history...</p>}
-              {historyError && <p className="text-sm text-red-500 mt-2">{historyError}</p>}
-              {history && (
-                <div className="mt-3 p-3 bg-gray-50 dark:bg-gray-700/50 rounded-md text-sm">
-                  <h4 className="font-semibold mb-1">Lifetime Order History:</h4>
-                  <p>Delivered Orders: <span className="font-bold">{history.delivered}</span></p>
-                  <p>Returned/Cancelled: <span className="font-bold">{history.returned}</span></p>
-                </div>
-              )}
-
+              <div className="mt-4 p-3 bg-gray-50 dark:bg-gray-700/50 rounded-md text-sm">
+                  <h4 className="font-semibold mb-2">Courier Delivery History</h4>
+                  <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">Check customer's record with a courier using their phone number.</p>
+                  <div className="flex items-center gap-2">
+                     <select
+                        value={historyCourier}
+                        onChange={(e) => setHistoryCourier(e.target.value as Courier)}
+                        className="block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 text-sm dark:bg-gray-900/50 dark:border-gray-600 dark:text-white"
+                        disabled={isHistoryLoading}
+                     >
+                        {Object.values(Courier).map(c => <option key={c} value={c}>{c}</option>)}
+                    </select>
+                    <button 
+                        onClick={handleViewHistory} 
+                        className="px-4 py-2 text-sm font-medium text-indigo-600 border border-indigo-600 rounded-md hover:bg-indigo-50 dark:text-indigo-400 dark:border-indigo-400 dark:hover:bg-gray-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                        disabled={isHistoryLoading || isHistoryConfigMissing}
+                    >
+                      {isHistoryLoading ? <Spinner className="text-indigo-500"/> : 'Check'}
+                    </button>
+                  </div>
+                  {isHistoryConfigMissing && (
+                    <p className="text-xs text-yellow-600 dark:text-yellow-400 mt-2">
+                        API details for {historyCourier} are missing in Settings.
+                    </p>
+                  )}
+                  {historyError && <p className="text-sm text-red-500 mt-2">{historyError}</p>}
+                  {history && (
+                    <div className="mt-3 grid grid-cols-2 gap-x-4 gap-y-1">
+                      <p>Total Parcels: <span className="font-bold">{history.totalParcels}</span></p>
+                      <p>Delivered: <span className="font-bold text-green-500">{history.delivered}</span></p>
+                      <p>Pending: <span className="font-bold text-yellow-500">{history.pending}</span></p>
+                      <p>Returned: <span className="font-bold text-red-500">{history.returned}</span></p>
+                    </div>
+                  )}
+              </div>
             </div>
             <div>
               <h3 className="font-semibold text-lg mb-2 text-gray-800 dark:text-gray-200">Shipping Address</h3>
-              <p>{order.shippingAddress}</p>
+              <p className="whitespace-pre-line">{order.shippingAddress}</p>
             </div>
           </div>
           
@@ -119,37 +219,70 @@ const OrderDetailModal: React.FC<OrderDetailModalProps> = ({ order, onClose, onU
             </div>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-center">
-            <div>
-              <h3 className="font-semibold text-lg mb-2 text-gray-800 dark:text-gray-200">Order Status</h3>
-              <div className="flex items-center gap-4">
-                <span className={`px-3 py-1 text-sm font-medium rounded-full ${statusColors[order.status]}`}>
-                  {order.status}
-                </span>
-                <select
-                  value={order.status}
-                  onChange={(e) => onUpdateStatus(order.id, e.target.value as OrderStatus)}
-                  className="block w-full max-w-xs rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-indigo-500 dark:focus:border-indigo-500"
-                >
-                  {Object.values(OrderStatus).map(status => (
-                    <option key={status} value={status}>{status}</option>
-                  ))}
-                </select>
+          <div className="p-4 bg-gray-50 dark:bg-gray-700/50 rounded-lg">
+            <h3 className="font-semibold text-lg mb-3 text-gray-800 dark:text-gray-200">Actions</h3>
+             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-start">
+              <div className="space-y-2">
+                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Update Status</label>
+                 <div className="flex items-center gap-2">
+                    <span className={`px-3 py-1 text-sm font-medium rounded-full ${statusColors[order.status]}`}>
+                        {order.status}
+                    </span>
+                    <select
+                      value={order.status}
+                      onChange={(e) => onUpdateStatus(order.id, e.target.value as OrderStatus)}
+                      className="block w-full max-w-xs rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-indigo-500 dark:focus:border-indigo-500"
+                    >
+                      {Object.values(OrderStatus).map(status => (
+                        <option key={status} value={status}>{status}</option>
+                      ))}
+                    </select>
+                 </div>
+              </div>
+              <div className="space-y-2">
+                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Courier Integration</label>
+                  {isBooked ? (
+                     <div className="p-3 rounded-md bg-green-100 dark:bg-green-900/50 text-green-800 dark:text-green-300">
+                        <p className="font-semibold">Booked with {order.courier}</p>
+                        <p className="text-sm">Tracking ID: {order.trackingId}</p>
+                     </div>
+                  ) : (
+                    <>
+                      <div className="flex gap-2">
+                        <select
+                          value={selectedCourier}
+                          onChange={(e) => setSelectedCourier(e.target.value as Courier)}
+                          className="block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+                          disabled={isBooked || courierStatus === 'sending'}
+                        >
+                          {Object.values(Courier).map(c => <option key={c} value={c}>{c}</option>)}
+                        </select>
+                        <button 
+                          onClick={handleSendToCourier}
+                          disabled={courierStatus === 'sending' || isBooked || isBookingConfigMissing}
+                          className="w-full inline-flex items-center justify-center gap-2 px-4 py-2 bg-blue-600 text-white font-semibold rounded-lg hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed dark:disabled:bg-gray-600 transition-colors"
+                        >
+                          {courierStatus === 'sending' && <Spinner className="-ml-1 mr-2 text-white" />}
+                          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-5 h-5">
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 18.75a1.5 1.5 0 0 1-3 0m3 0a1.5 1.5 0 0 0-3 0m3 0h6m-9 0H3.375a1.125 1.125 0 0 1-1.125-1.125V14.25m17.25 4.5a1.5 1.5 0 0 1-3 0m3 0a1.5 1.5 0 0 0-3 0m3 0h1.125c.621 0 1.125-.504 1.125-1.125V14.25m-17.25 4.5v-1.875a3.375 3.375 0 0 1 3.375-3.375h1.5a1.125 1.125 0 0 1 1.125 1.125v-1.5a3.375 3.375 0 0 1 3.375-3.375H15M12 14.25h.008v.008H12v-.008Z" />
+                          </svg>
+                          Send
+                        </button>
+                      </div>
+                      {isBookingConfigMissing && !isBooked && (
+                        <p className="text-xs text-yellow-600 dark:text-yellow-400 mt-1">
+                            {missingBookingConfigMessage}
+                        </p>
+                      )}
+                      {courierMessage && (
+                        <p className={`text-sm mt-2 ${courierStatus === 'error' ? 'text-red-500' : 'text-green-600'}`}>
+                          {courierMessage}
+                        </p>
+                      )}
+                    </>
+                  )}
               </div>
             </div>
-             <div className="text-left md:text-right">
-                <h3 className="font-semibold text-lg mb-2 text-gray-800 dark:text-gray-200 invisible hidden md:block">Actions</h3>
-                 <button 
-                  onClick={() => onUpdateStatus(order.id, OrderStatus.Shipped)}
-                  disabled={!canShip}
-                  className="inline-flex items-center gap-2 px-4 py-2 bg-green-600 text-white font-semibold rounded-lg hover:bg-green-700 disabled:bg-gray-400 disabled:cursor-not-allowed dark:disabled:bg-gray-600"
-                 >
-                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-5 h-5">
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 18.75a1.5 1.5 0 0 1-3 0m3 0a1.5 1.5 0 0 0-3 0m3 0h6m-9 0H3.375a1.125 1.125 0 0 1-1.125-1.125V14.25m17.25 4.5a1.5 1.5 0 0 1-3 0m3 0a1.5 1.5 0 0 0-3 0m3 0h1.125c.621 0 1.125-.504 1.125-1.125V14.25m-17.25 4.5v-1.875a3.375 3.375 0 0 1 3.375-3.375h1.5a1.125 1.125 0 0 1 1.125 1.125v-1.5a3.375 3.375 0 0 1 3.375-3.375H15M12 14.25h.008v.008H12v-.008Z" />
-                    </svg>
-                   Prepare for Shipping
-                 </button>
-             </div>
           </div>
         </div>
       </div>

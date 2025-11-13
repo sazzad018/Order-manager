@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Order, OrderStatus } from './types';
+import { Order, OrderStatus, Courier } from './types';
 import { fetchOrders, updateOrderStatus } from './services/orderService';
 import Header from './components/Header';
 import OrderList from './components/OrderList';
@@ -7,6 +7,7 @@ import OrderDetailModal from './components/OrderDetailModal';
 import Login from './components/Login';
 import ConnectionWizard from './components/ConnectionWizard';
 import InfoPanel from './components/InfoPanel';
+import SettingsModal from './components/SettingsModal';
 
 const App: React.FC = () => {
   const [orders, setOrders] = useState<Order[]>([]);
@@ -20,6 +21,7 @@ const App: React.FC = () => {
   const [siteUrl, setSiteUrl] = useState<string | null>(() => localStorage.getItem('siteUrl'));
   const [apiKey, setApiKey] = useState<string | null>(() => localStorage.getItem('apiKey'));
   const [showConnectionWizard, setShowConnectionWizard] = useState<boolean>(false);
+  const [showSettings, setShowSettings] = useState<boolean>(false);
 
   const loadOrders = useCallback(async () => {
     if (!isConnected || !siteUrl || !apiKey) return;
@@ -98,6 +100,17 @@ const App: React.FC = () => {
     }
   };
 
+  const handleOrderBooked = (orderId: string, courier: Courier, trackingId: string) => {
+    setOrders(prevOrders =>
+      prevOrders.map(order =>
+        order.id === orderId ? { ...order, courier, trackingId } : order
+      )
+    );
+    if (selectedOrder && selectedOrder.id === orderId) {
+      setSelectedOrder(prev => prev ? {...prev, courier, trackingId } : null);
+    }
+  };
+
   if (!isLoggedIn) {
     return <Login onLogin={handleLogin} />;
   }
@@ -108,6 +121,7 @@ const App: React.FC = () => {
         isLoggedIn={isLoggedIn}
         onLogout={handleLogout}
         connectedSiteUrl={siteUrl}
+        onSettingsClick={() => setShowSettings(true)}
       />
       <main className="container mx-auto p-4 md:p-8">
         
@@ -140,12 +154,15 @@ const App: React.FC = () => {
       </main>
       
       {showConnectionWizard && <ConnectionWizard onConnect={handleConnect} onClose={() => setShowConnectionWizard(false)} />}
+      
+      {showSettings && <SettingsModal onClose={() => setShowSettings(false)} />}
 
       {selectedOrder && (
         <OrderDetailModal
           order={selectedOrder}
           onClose={handleCloseModal}
           onUpdateStatus={handleUpdateStatus}
+          onOrderBooked={handleOrderBooked}
         />
       )}
     </div>

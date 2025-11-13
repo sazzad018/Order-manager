@@ -6,6 +6,11 @@ export enum OrderStatus {
   Cancelled = 'Cancelled',
 }
 
+export enum Courier {
+  Steadfast = 'Steadfast',
+  Pathao = 'Pathao',
+}
+
 export interface OrderItem {
   id: string;
   name: string;
@@ -24,9 +29,13 @@ export interface Order {
   items: OrderItem[];
   total: number;
   shippingAddress: string;
+  courier?: Courier;
+  trackingId?: string;
 }
 
 export interface CustomerHistory {
+  totalParcels: number;
   delivered: number;
   returned: number;
+  pending: number;
 }

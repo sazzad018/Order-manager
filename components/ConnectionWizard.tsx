@@ -9,7 +9,7 @@ const pluginCode = `<?php
 /**
  * Plugin Name:       Order Manager Connector
  * Description:       Connects your WooCommerce store to the E-commerce Order Manager application.
- * Version:           1.0.2
+ * Version:           1.0.6
  * Author:            AI Assistant
  * License:           GPL-2.0-or-later
  * License URI:       https://www.gnu.org/licenses/gpl-2.0.html
@@ -133,18 +133,6 @@ function omc_register_api_routes() {
             ],
         ],
     ]);
-
-    register_rest_route($namespace, '/customer-history', [
-        'methods' => 'GET',
-        'callback' => 'omc_get_customer_history',
-        'permission_callback' => 'omc_check_api_key',
-        'args' => [
-            'email' => [
-                'required' => true,
-                'validate_callback' => 'is_email'
-            ],
-        ],
-    ]);
 }
 
 // Permission check for all endpoints
@@ -192,6 +180,27 @@ function omc_format_order_data($order) {
     ];
     $order_status = $order->get_status();
 
+    // Get shipping address, fallback to billing address, and format for plain text display.
+    $address_obj = $order->get_address('shipping');
+    if (empty(array_filter($address_obj))) {
+        $address_obj = $order->get_address('billing');
+    }
+
+    $address_components = [
+        $address_obj['first_name'] . ' ' . $address_obj['last_name'],
+        $address_obj['company'],
+        $address_obj['address_1'],
+        $address_obj['address_2'],
+        trim($address_obj['city'] . ', ' . $address_obj['state'] . ' ' . $address_obj['postcode']),
+        WC()->countries->countries[$address_obj['country']] ?? $address_obj['country']
+    ];
+
+    // Filter out any empty or whitespace-only lines and join them with a newline character.
+    $shipping_address_text = implode("\n", array_filter(array_map('trim', $address_components)));
+
+    if (empty($shipping_address_text)) {
+        $shipping_address_text = 'No address provided.';
+    }
 
     return [
         'id'              => (string) $order->get_id(),
@@ -202,7 +211,7 @@ function omc_format_order_data($order) {
         'status'          => isset($status_map[$order_status]) ? $status_map[$order_status] : ucfirst($order_status),
         'items'           => $items,
         'total'           => (float) $order->get_total(),
-        'shippingAddress' => $order->get_formatted_shipping_address('N/A'),
+        'shippingAddress' => $shipping_address_text,
     ];
 }
 
@@ -234,37 +243,6 @@ function omc_update_order_status(WP_REST_Request $request) {
         return new WP_Error('update_failed', $e->getMessage(), ['status' => 500]);
     }
 }
-
-// Callback to get customer history
-function omc_get_customer_history(WP_REST_Request $request) {
-    $email = sanitize_email($request->get_param('email'));
-    
-    $orders = wc_get_orders([
-        'customer' => $email,
-        'limit' => -1, // Get all orders for the customer
-    ]);
-
-    if (empty($orders)) {
-        return new WP_REST_Response(['delivered' => 0, 'returned' => 0], 200);
-    }
-
-    $stats = [
-        'delivered' => 0,
-        'returned' => 0,
-    ];
-
-    foreach ($orders as $order) {
-        $status = $order->get_status();
-        if ($status === 'completed') {
-            $stats['delivered']++;
-        } elseif (in_array($status, ['cancelled', 'refunded', 'failed'])) {
-            $stats['returned']++;
-        }
-    }
-
-    return new WP_REST_Response($stats, 200);
-}
-
 
 // Handle CORS
 add_filter('rest_pre_serve_request', function( $value, $result, $request, $server ) {
