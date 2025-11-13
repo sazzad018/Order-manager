@@ -9,7 +9,7 @@ const pluginCode = `<?php
 /**
  * Plugin Name:       Order Manager Connector
  * Description:       Connects your WooCommerce store to the E-commerce Order Manager application.
- * Version:           1.0.1
+ * Version:           1.0.2
  * Author:            AI Assistant
  * License:           GPL-2.0-or-later
  * License URI:       https://www.gnu.org/licenses/gpl-2.0.html
@@ -133,6 +133,18 @@ function omc_register_api_routes() {
             ],
         ],
     ]);
+
+    register_rest_route($namespace, '/customer-history', [
+        'methods' => 'GET',
+        'callback' => 'omc_get_customer_history',
+        'permission_callback' => 'omc_check_api_key',
+        'args' => [
+            'email' => [
+                'required' => true,
+                'validate_callback' => 'is_email'
+            ],
+        ],
+    ]);
 }
 
 // Permission check for all endpoints
@@ -223,11 +235,45 @@ function omc_update_order_status(WP_REST_Request $request) {
     }
 }
 
+// Callback to get customer history
+function omc_get_customer_history(WP_REST_Request $request) {
+    $email = sanitize_email($request->get_param('email'));
+    
+    $orders = wc_get_orders([
+        'customer' => $email,
+        'limit' => -1, // Get all orders for the customer
+    ]);
+
+    if (empty($orders)) {
+        return new WP_REST_Response(['delivered' => 0, 'returned' => 0], 200);
+    }
+
+    $stats = [
+        'delivered' => 0,
+        'returned' => 0,
+    ];
+
+    foreach ($orders as $order) {
+        $status = $order->get_status();
+        if ($status === 'completed') {
+            $stats['delivered']++;
+        } elseif (in_array($status, ['cancelled', 'refunded', 'failed'])) {
+            $stats['returned']++;
+        }
+    }
+
+    return new WP_REST_Response($stats, 200);
+}
+
+
 // Handle CORS
 add_filter('rest_pre_serve_request', function( $value, $result, $request, $server ) {
-    $server->send_header('Access-Control-Allow-Origin', '*');
-    $server->send_header('Access-Control-Allow-Methods', 'GET, POST');
-    $server->send_header('Access-Control-Allow-Headers', 'Authorization, Content-Type');
+    // Check if the request is for our namespace
+    if (strpos($request->get_route(), 'order-manager/v1') !== false) {
+        $server->send_header('Access-Control-Allow-Origin', '*');
+        $server->send_header('Access-Control-Allow-Methods', 'GET, POST');
+        $server->send_header('Access-Control-Allow-Headers', 'Authorization, Content-Type');
+    }
     return $value;
 }, 10, 4);`;
 
@@ -249,18 +295,28 @@ const ConnectionWizard: React.FC<ConnectionWizardProps> = ({ onConnect, onClose 
   };
 
   const handleConnect = () => {
-    if (!siteUrl.trim() || !apiKey.trim()) {
+    let url = siteUrl.trim();
+    const key = apiKey.trim();
+
+    if (!url || !key) {
       setError('Both fields are required.');
       return;
     }
+    
+    // Prepend https:// if no protocol is present
+    if (!/^https?:\/\//i.test(url)) {
+      url = 'https://' + url;
+    }
+    
     try {
-      new URL(siteUrl);
+      new URL(url);
     } catch (_) {
       setError('Please enter a valid Site URL (e.g., https://example.com).');
       return;
     }
+    
     setError('');
-    onConnect(siteUrl, apiKey);
+    onConnect(url, key);
   };
 
   return (

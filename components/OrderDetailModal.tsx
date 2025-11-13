@@ -1,5 +1,6 @@
-import React from 'react';
-import { Order, OrderStatus } from '../types';
+import React, { useState } from 'react';
+import { Order, OrderStatus, CustomerHistory } from '../types';
+import { fetchCustomerHistory } from '../services/orderService';
 
 interface OrderDetailModalProps {
   order: Order;
@@ -16,6 +17,30 @@ const statusColors: { [key in OrderStatus]: string } = {
 };
 
 const OrderDetailModal: React.FC<OrderDetailModalProps> = ({ order, onClose, onUpdateStatus }) => {
+  const [history, setHistory] = useState<CustomerHistory | null>(null);
+  const [isHistoryLoading, setIsHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState<string | null>(null);
+
+  const siteUrl = localStorage.getItem('siteUrl');
+  const apiKey = localStorage.getItem('apiKey');
+  
+  const handleViewHistory = async () => {
+    if (!siteUrl || !apiKey) return;
+    setIsHistoryLoading(true);
+    setHistoryError(null);
+    try {
+      const historyData = await fetchCustomerHistory(order.customerEmail, siteUrl, apiKey);
+      setHistory(historyData);
+    } catch (error) {
+      setHistoryError('Could not load customer history.');
+      console.error(error);
+    } finally {
+      setIsHistoryLoading(false);
+    }
+  };
+  
+  const canShip = order.status === OrderStatus.Pending || order.status === OrderStatus.Processing;
+
   return (
     <div 
       className="fixed inset-0 bg-black bg-opacity-60 z-30 flex justify-center items-center p-4"
@@ -51,9 +76,23 @@ const OrderDetailModal: React.FC<OrderDetailModalProps> = ({ order, onClose, onU
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             <div>
               <h3 className="font-semibold text-lg mb-2 text-gray-800 dark:text-gray-200">Customer Details</h3>
-              <p><strong>Name:</strong> {order.customerName}</p>
+              <div className="flex items-center gap-4">
+                 <p><strong>Name:</strong> {order.customerName}</p>
+                 <button onClick={handleViewHistory} className="text-xs text-indigo-600 dark:text-indigo-400 hover:underline">View History</button>
+              </div>
               <p><strong>Email:</strong> {order.customerEmail}</p>
               <p><strong>Phone:</strong> {order.customerPhone}</p>
+              
+              {isHistoryLoading && <p className="text-sm mt-2">Loading history...</p>}
+              {historyError && <p className="text-sm text-red-500 mt-2">{historyError}</p>}
+              {history && (
+                <div className="mt-3 p-3 bg-gray-50 dark:bg-gray-700/50 rounded-md text-sm">
+                  <h4 className="font-semibold mb-1">Lifetime Order History:</h4>
+                  <p>Delivered Orders: <span className="font-bold">{history.delivered}</span></p>
+                  <p>Returned/Cancelled: <span className="font-bold">{history.returned}</span></p>
+                </div>
+              )}
+
             </div>
             <div>
               <h3 className="font-semibold text-lg mb-2 text-gray-800 dark:text-gray-200">Shipping Address</h3>
@@ -80,22 +119,37 @@ const OrderDetailModal: React.FC<OrderDetailModalProps> = ({ order, onClose, onU
             </div>
           </div>
 
-          <div>
-            <h3 className="font-semibold text-lg mb-2 text-gray-800 dark:text-gray-200">Order Status</h3>
-            <div className="flex items-center gap-4">
-              <span className={`px-3 py-1 text-sm font-medium rounded-full ${statusColors[order.status]}`}>
-                {order.status}
-              </span>
-              <select
-                value={order.status}
-                onChange={(e) => onUpdateStatus(order.id, e.target.value as OrderStatus)}
-                className="block w-full max-w-xs rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-indigo-500 dark:focus:border-indigo-500"
-              >
-                {Object.values(OrderStatus).map(status => (
-                  <option key={status} value={status}>{status}</option>
-                ))}
-              </select>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-center">
+            <div>
+              <h3 className="font-semibold text-lg mb-2 text-gray-800 dark:text-gray-200">Order Status</h3>
+              <div className="flex items-center gap-4">
+                <span className={`px-3 py-1 text-sm font-medium rounded-full ${statusColors[order.status]}`}>
+                  {order.status}
+                </span>
+                <select
+                  value={order.status}
+                  onChange={(e) => onUpdateStatus(order.id, e.target.value as OrderStatus)}
+                  className="block w-full max-w-xs rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-indigo-500 dark:focus:border-indigo-500"
+                >
+                  {Object.values(OrderStatus).map(status => (
+                    <option key={status} value={status}>{status}</option>
+                  ))}
+                </select>
+              </div>
             </div>
+             <div className="text-left md:text-right">
+                <h3 className="font-semibold text-lg mb-2 text-gray-800 dark:text-gray-200 invisible hidden md:block">Actions</h3>
+                 <button 
+                  onClick={() => onUpdateStatus(order.id, OrderStatus.Shipped)}
+                  disabled={!canShip}
+                  className="inline-flex items-center gap-2 px-4 py-2 bg-green-600 text-white font-semibold rounded-lg hover:bg-green-700 disabled:bg-gray-400 disabled:cursor-not-allowed dark:disabled:bg-gray-600"
+                 >
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-5 h-5">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 18.75a1.5 1.5 0 0 1-3 0m3 0a1.5 1.5 0 0 0-3 0m3 0h6m-9 0H3.375a1.125 1.125 0 0 1-1.125-1.125V14.25m17.25 4.5a1.5 1.5 0 0 1-3 0m3 0a1.5 1.5 0 0 0-3 0m3 0h1.125c.621 0 1.125-.504 1.125-1.125V14.25m-17.25 4.5v-1.875a3.375 3.375 0 0 1 3.375-3.375h1.5a1.125 1.125 0 0 1 1.125 1.125v-1.5a3.375 3.375 0 0 1 3.375-3.375H15M12 14.25h.008v.008H12v-.008Z" />
+                    </svg>
+                   Prepare for Shipping
+                 </button>
+             </div>
           </div>
         </div>
       </div>

@@ -25,3 +25,8 @@ export interface Order {
   total: number;
   shippingAddress: string;
 }
+
+export interface CustomerHistory {
+  delivered: number;
+  returned: number;
+}

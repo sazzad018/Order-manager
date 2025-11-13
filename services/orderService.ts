@@ -1,4 +1,4 @@
-import { Order, OrderStatus } from '../types';
+import { Order, OrderStatus, CustomerHistory } from '../types';
 
 // This function makes a network request to the WordPress site to fetch orders.
 export const fetchOrders = async (siteUrl: string, apiKey: string): Promise<Order[]> => {
@@ -48,6 +48,23 @@ export const updateOrderStatus = async (orderId: string, status: OrderStatus, si
         throw new Error('Failed to update order status. The server returned an invalid response.');
      }
   }
+  const data = await response.json();
+  return data;
+};
+
+// This function fetches the order history for a specific customer.
+export const fetchCustomerHistory = async (customerEmail: string, siteUrl: string, apiKey: string): Promise<CustomerHistory> => {
+  const url = new URL(`${siteUrl.replace(/\/+$/, "")}/wp-json/order-manager/v1/customer-history`);
+  url.searchParams.append('email', customerEmail);
+  
+  const response = await fetch(url.toString(), {
+    headers: { 'Authorization': `Bearer ${apiKey}` }
+  });
+
+  if (!response.ok) {
+    throw new Error("Failed to fetch customer history.");
+  }
+  
   const data = await response.json();
   return data;
 };
