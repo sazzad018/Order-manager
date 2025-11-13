@@ -1,0 +1,5 @@
+{
+  "name": "E-commerce Order Manager",
+  "description": "An application to display and manage e-commerce orders, with guidance on how to connect it to a WordPress/WooCommerce backend using the Gemini API.",
+  "requestFramePermissions": []
+}
