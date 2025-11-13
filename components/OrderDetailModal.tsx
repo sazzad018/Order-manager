@@ -27,11 +27,14 @@ const Spinner: React.FC<{className?: string}> = ({className}) => (
 
 
 const OrderDetailModal: React.FC<OrderDetailModalProps> = ({ order, onClose, onUpdateStatus, onOrderBooked }) => {
-  const [history, setHistory] = useState<CustomerHistory | null>(null);
-  const [isHistoryLoading, setIsHistoryLoading] = useState(false);
-  const [historyError, setHistoryError] = useState<string | null>(null);
-  const [historyCourier, setHistoryCourier] = useState<Courier>(Courier.Steadfast);
-  
+  // State for courier histories
+  const [steadfastHistory, setSteadfastHistory] = useState<CustomerHistory | null>(null);
+  const [isSteadfastHistoryLoading, setIsSteadfastHistoryLoading] = useState(false);
+  const [steadfastHistoryError, setSteadfastHistoryError] = useState<string | null>(null);
+  const [pathaoHistory, setPathaoHistory] = useState<CustomerHistory | null>(null);
+  const [isPathaoHistoryLoading, setIsPathaoHistoryLoading] = useState(false);
+  const [pathaoHistoryError, setPathaoHistoryError] = useState<string | null>(null);
+
   // State for the courier booking feature
   const [courierStatus, setCourierStatus] = useState<'idle' | 'sending' | 'sent' | 'error'>('idle');
   const [courierMessage, setCourierMessage] = useState('');
@@ -44,36 +47,39 @@ const OrderDetailModal: React.FC<OrderDetailModalProps> = ({ order, onClose, onU
   const [pathaoStoreId, setPathaoStoreId] = useState<string|null>(null);
 
   useEffect(() => {
-    // Load all courier configs from localStorage when the modal opens
-    setSteadfastApiKey(localStorage.getItem('steadfastApiKey'));
-    setSteadfastSecretKey(localStorage.getItem('steadfastSecretKey'));
-    setPathaoApiKey(localStorage.getItem('pathaoApiKey'));
-    setPathaoStoreId(localStorage.getItem('pathaoStoreId'));
-  }, []);
+    // Load configs and automatically fetch histories when the modal opens
+    const sfApiKey = localStorage.getItem('steadfastApiKey');
+    const sfSecretKey = localStorage.getItem('steadfastSecretKey');
+    const ptApiKey = localStorage.getItem('pathaoApiKey');
+    const ptStoreId = localStorage.getItem('pathaoStoreId');
 
-  const handleViewHistory = async () => {
-    setIsHistoryLoading(true);
-    setHistoryError(null);
-    setHistory(null); // Clear previous history on new request
+    setSteadfastApiKey(sfApiKey);
+    setSteadfastSecretKey(sfSecretKey);
+    setPathaoApiKey(ptApiKey);
+    setPathaoStoreId(ptStoreId);
 
-    let courierConfig = {};
-    if (historyCourier === Courier.Steadfast) {
-      courierConfig = { apiKey: steadfastApiKey, secretKey: steadfastSecretKey };
-    } else { // Pathao
-      // For history check, we might only need the token, but we pass the whole config for flexibility
-      courierConfig = { apiKey: pathaoApiKey, storeId: pathaoStoreId };
+    // Fetch Steadfast history
+    if (sfApiKey && sfSecretKey) {
+        setIsSteadfastHistoryLoading(true);
+        setSteadfastHistoryError(null);
+        setSteadfastHistory(null);
+        fetchCourierCustomerHistory(order.customerPhone, Courier.Steadfast, { apiKey: sfApiKey, secretKey: sfSecretKey })
+            .then(setSteadfastHistory)
+            .catch(error => setSteadfastHistoryError(error instanceof Error ? error.message : 'Could not load Steadfast history.'))
+            .finally(() => setIsSteadfastHistoryLoading(false));
     }
 
-    try {
-      const historyData = await fetchCourierCustomerHistory(order.customerPhone, historyCourier, courierConfig);
-      setHistory(historyData);
-    } catch (error) {
-      setHistoryError(error instanceof Error ? error.message : 'Could not load customer history.');
-      console.error(error);
-    } finally {
-      setIsHistoryLoading(false);
+    // Fetch Pathao history
+    if (ptApiKey) { // Pathao history check might only need the access token
+        setIsPathaoHistoryLoading(true);
+        setPathaoHistoryError(null);
+        setPathaoHistory(null);
+        fetchCourierCustomerHistory(order.customerPhone, Courier.Pathao, { apiKey: ptApiKey, storeId: ptStoreId })
+            .then(setPathaoHistory)
+            .catch(error => setPathaoHistoryError(error instanceof Error ? error.message : 'Could not load Pathao history.'))
+            .finally(() => setIsPathaoHistoryLoading(false));
     }
-  };
+  }, [order.customerPhone]);
   
   const handleSendToCourier = async () => {
     let courierConfig = {};
@@ -114,10 +120,6 @@ const OrderDetailModal: React.FC<OrderDetailModalProps> = ({ order, onClose, onU
   const missingBookingConfigMessage = selectedCourier === Courier.Steadfast
     ? "Please add an API Key and Secret Key for Steadfast in the Settings."
     : "Please add an Access Token and Store ID for Pathao in the Settings.";
-
-  const isHistoryConfigMissing = historyCourier === Courier.Steadfast
-    ? !steadfastApiKey || !steadfastSecretKey
-    : !pathaoApiKey; // Pathao history check might only need the access token
 
   return (
     <div 
@@ -160,38 +162,55 @@ const OrderDetailModal: React.FC<OrderDetailModalProps> = ({ order, onClose, onU
               
               <div className="mt-4 p-3 bg-gray-50 dark:bg-gray-700/50 rounded-md text-sm">
                   <h4 className="font-semibold mb-2">Courier Delivery History</h4>
-                  <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">Check customer's record with a courier using their phone number.</p>
-                  <div className="flex items-center gap-2">
-                     <select
-                        value={historyCourier}
-                        onChange={(e) => setHistoryCourier(e.target.value as Courier)}
-                        className="block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 text-sm dark:bg-gray-900/50 dark:border-gray-600 dark:text-white"
-                        disabled={isHistoryLoading}
-                     >
-                        {Object.values(Courier).map(c => <option key={c} value={c}>{c}</option>)}
-                    </select>
-                    <button 
-                        onClick={handleViewHistory} 
-                        className="px-4 py-2 text-sm font-medium text-indigo-600 border border-indigo-600 rounded-md hover:bg-indigo-50 dark:text-indigo-400 dark:border-indigo-400 dark:hover:bg-gray-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                        disabled={isHistoryLoading || isHistoryConfigMissing}
-                    >
-                      {isHistoryLoading ? <Spinner className="text-indigo-500"/> : 'Check'}
-                    </button>
+                  <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">Customer's delivery record based on their phone number.</p>
+                  
+                  <div className="space-y-3">
+                      {/* Steadfast Section */}
+                      <div>
+                          <div className="flex items-center justify-between">
+                              <h5 className="font-semibold text-gray-700 dark:text-gray-300">Steadfast</h5>
+                              {isSteadfastHistoryLoading && <Spinner className="text-gray-400 w-4 h-4" />}
+                          </div>
+                          {!steadfastApiKey || !steadfastSecretKey ? (
+                              <p className="text-xs text-yellow-600 dark:text-yellow-400 mt-1">
+                                  API details for Steadfast are missing in Settings.
+                              </p>
+                          ) : steadfastHistoryError ? (
+                              <p className="text-sm text-red-500 mt-1">{steadfastHistoryError}</p>
+                          ) : steadfastHistory ? (
+                              <div className="mt-1 grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
+                                  <p>Total: <span className="font-bold">{steadfastHistory.totalParcels}</span></p>
+                                  <p>Delivered: <span className="font-bold text-green-500">{steadfastHistory.delivered}</span></p>
+                                  <p>Pending: <span className="font-bold text-yellow-500">{steadfastHistory.pending}</span></p>
+                                  <p>Returned: <span className="font-bold text-red-500">{steadfastHistory.returned}</span></p>
+                              </div>
+                          ) : null}
+                      </div>
+
+                      <hr className="border-gray-200 dark:border-gray-600" />
+
+                      {/* Pathao Section */}
+                      <div>
+                          <div className="flex items-center justify-between">
+                              <h5 className="font-semibold text-gray-700 dark:text-gray-300">Pathao</h5>
+                              {isPathaoHistoryLoading && <Spinner className="text-gray-400 w-4 h-4" />}
+                          </div>
+                          {!pathaoApiKey ? (
+                              <p className="text-xs text-yellow-600 dark:text-yellow-400 mt-1">
+                                  Access Token for Pathao is missing in Settings.
+                              </p>
+                          ) : pathaoHistoryError ? (
+                              <p className="text-sm text-red-500 mt-1">{pathaoHistoryError}</p>
+                          ) : pathaoHistory ? (
+                              <div className="mt-1 grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
+                                  <p>Total: <span className="font-bold">{pathaoHistory.totalParcels}</span></p>
+                                  <p>Delivered: <span className="font-bold text-green-500">{pathaoHistory.delivered}</span></p>
+                                  <p>Pending: <span className="font-bold text-yellow-500">{pathaoHistory.pending}</span></p>
+                                  <p>Returned: <span className="font-bold text-red-500">{pathaoHistory.returned}</span></p>
+                              </div>
+                          ) : null}
+                      </div>
                   </div>
-                  {isHistoryConfigMissing && (
-                    <p className="text-xs text-yellow-600 dark:text-yellow-400 mt-2">
-                        API details for {historyCourier} are missing in Settings.
-                    </p>
-                  )}
-                  {historyError && <p className="text-sm text-red-500 mt-2">{historyError}</p>}
-                  {history && (
-                    <div className="mt-3 grid grid-cols-2 gap-x-4 gap-y-1">
-                      <p>Total Parcels: <span className="font-bold">{history.totalParcels}</span></p>
-                      <p>Delivered: <span className="font-bold text-green-500">{history.delivered}</span></p>
-                      <p>Pending: <span className="font-bold text-yellow-500">{history.pending}</span></p>
-                      <p>Returned: <span className="font-bold text-red-500">{history.returned}</span></p>
-                    </div>
-                  )}
               </div>
             </div>
             <div>
