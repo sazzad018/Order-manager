@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useCallback } from 'react';
 import { Order, OrderStatus } from './types';
 import { fetchOrders, updateOrderStatus } from './services/orderService';
@@ -7,6 +6,7 @@ import OrderList from './components/OrderList';
 import OrderDetailModal from './components/OrderDetailModal';
 import Login from './components/Login';
 import ConnectionWizard from './components/ConnectionWizard';
+import InfoPanel from './components/InfoPanel';
 
 const App: React.FC = () => {
   const [orders, setOrders] = useState<Order[]>([]);
@@ -40,7 +40,7 @@ const App: React.FC = () => {
     if (isLoggedIn && isConnected) {
       loadOrders();
     } else if(isLoggedIn && !isConnected) {
-      setShowConnectionWizard(true);
+      // No need to set showConnectionWizard here, let the user decide
       setIsLoading(false);
     } else {
       setIsLoading(false);
@@ -50,9 +50,7 @@ const App: React.FC = () => {
   const handleLogin = () => {
     setIsLoggedIn(true);
     localStorage.setItem('isLoggedIn', 'true');
-    if (!isConnected) {
-        setShowConnectionWizard(true);
-    }
+    // Don't automatically show the wizard, let the InfoPanel handle the CTA
   };
   
   const handleLogout = () => {
@@ -137,15 +135,7 @@ const App: React.FC = () => {
             )}
           </div>
         ) : (
-           <div className="text-center mt-20">
-            <h2 className="text-2xl font-semibold text-gray-700 dark:text-gray-300">Welcome!</h2>
-            <p className="mt-2 text-gray-500 dark:text-gray-400">Please connect your WordPress site to get started.</p>
-            <button 
-              onClick={() => setShowConnectionWizard(true)}
-              className="mt-6 px-6 py-3 bg-indigo-600 text-white font-semibold rounded-lg shadow-md hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2">
-              Connect Site
-            </button>
-           </div>
+           <InfoPanel onConnectClick={() => setShowConnectionWizard(true)} />
         )}
       </main>
       
