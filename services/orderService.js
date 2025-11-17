@@ -1,7 +1,7 @@
-import { Order, OrderStatus, CustomerHistory, Courier } from '../types';
+import { Courier } from '../types.js';
 
 // This function makes a network request to the WordPress site to fetch orders.
-export const fetchOrders = async (siteUrl: string, apiKey: string): Promise<Order[]> => {
+export const fetchOrders = async (siteUrl, apiKey) => {
   const response = await fetch(`${siteUrl.replace(/\/+$/, "")}/wp-json/order-manager/v1/orders`, {
     headers: { 'Authorization': `Bearer ${apiKey}` }
   });
@@ -13,13 +13,10 @@ export const fetchOrders = async (siteUrl: string, apiKey: string): Promise<Orde
 };
 
 // This function makes a network request to update the order status on the WordPress site.
-export const updateOrderStatus = async (orderId: string, status: OrderStatus, siteUrl: string, apiKey: string): Promise<Order> => {
-  // The PHP plugin expects the lowercase WooCommerce status, not the app's capitalized status.
-  // We need to map it back before sending the update.
-  const statusMap: { [key in OrderStatus]?: string } = {
+export const updateOrderStatus = async (orderId, status, siteUrl, apiKey) => {
+  const statusMap = {
       [OrderStatus.Pending]: 'pending',
       [OrderStatus.Processing]: 'processing',
-      // WooCommerce doesn't have a "Shipped" status by default. Mapping to "completed" is a common practice.
       [OrderStatus.Shipped]: 'completed',
       [OrderStatus.Delivered]: 'completed',
       [OrderStatus.Cancelled]: 'cancelled',
@@ -37,7 +34,7 @@ export const updateOrderStatus = async (orderId: string, status: OrderStatus, si
       'Authorization': `Bearer ${apiKey}`,
       'Content-Type': 'application/json'
     },
-    body: JSON.stringify({ status: wcStatus }) // Send the lowercase WooCommerce status
+    body: JSON.stringify({ status: wcStatus })
   });
   
   if (!response.ok) {
@@ -55,45 +52,29 @@ export const updateOrderStatus = async (orderId: string, status: OrderStatus, si
 
 // --- COURIER HISTORY AND INTEGRATION ---
 
-/**
- * MOCK: Simulates fetching customer delivery history from Steadfast using a phone number.
- * NOTE: This is a placeholder. The actual API endpoint and response structure may differ.
- */
-const fetchSteadfastHistory = async (phone: string, apiKey: string, secretKey: string): Promise<CustomerHistory> => {
+const fetchSteadfastHistory = async (phone, apiKey, secretKey) => {
     console.log(`MOCK: Fetching Steadfast history for phone: ${phone} with API Key: ${apiKey}`);
-    // Simulate network delay
     await new Promise(resolve => setTimeout(resolve, 1500)); 
-
-    // Mock response logic for demonstration.
     const hash = phone.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
     const delivered = hash % 10;
     const returned = Math.floor(hash % 5 / 2);
     const pending = Math.floor(hash % 3 / 2);
     const totalParcels = delivered + returned + pending;
-
     return { totalParcels, delivered, returned, pending };
 };
 
-/**
- * MOCK: Simulates fetching customer delivery history from Pathao using a phone number.
- * NOTE: This is a placeholder. The actual API endpoint and response structure may differ.
- */
-const fetchPathaoHistory = async (phone: string, accessToken: string): Promise<CustomerHistory> => {
+const fetchPathaoHistory = async (phone, accessToken) => {
     console.log(`MOCK: Fetching Pathao history for phone: ${phone} with Token: ${accessToken}`);
-    // Simulate network delay
     await new Promise(resolve => setTimeout(resolve, 1500));
-
-    // Mock response logic for demonstration.
     const hash = phone.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
     const delivered = hash % 12;
     const returned = Math.floor(hash % 4 / 2);
     const pending = Math.floor(hash % 2);
     const totalParcels = delivered + returned + pending;
-
     return { totalParcels, delivered, returned, pending };
 };
 
-export const fetchCourierCustomerHistory = async (phone: string, courier: Courier, config: any): Promise<CustomerHistory> => {
+export const fetchCourierCustomerHistory = async (phone, courier, config) => {
     console.log(`Fetching customer history for phone ${phone} from ${courier}`);
     if (courier === Courier.Steadfast) {
         if (!config.apiKey || !config.secretKey) throw new Error('Steadfast API Key and Secret Key are required.');
@@ -101,7 +82,6 @@ export const fetchCourierCustomerHistory = async (phone: string, courier: Courie
     }
     if (courier === Courier.Pathao) {
         if (!config.apiKey) throw new Error('Pathao Access Token is required.');
-        // Assuming config.apiKey is the access token for this call
         return await fetchPathaoHistory(phone, config.apiKey);
     }
     throw new Error(`History check for "${courier}" is not configured.`);
@@ -110,7 +90,7 @@ export const fetchCourierCustomerHistory = async (phone: string, courier: Courie
 
 // --- REAL INTEGRATION CODE ---
 
-const sendToSteadfast = async (order: Order, apiKey: string, secretKey: string) => {
+const sendToSteadfast = async (order, apiKey, secretKey) => {
   const STEADFAST_API_URL = 'https://portal.steadfast.com.bd/api/v1/create_order';
   
   const payload = {
@@ -118,7 +98,7 @@ const sendToSteadfast = async (order: Order, apiKey: string, secretKey: string) 
     recipient_name: order.customerName,
     recipient_address: order.shippingAddress.replace(/\n/g, ', '), // Replace newlines to prevent API errors
     recipient_phone: order.customerPhone,
-    cod_amount: order.total, // Reverted to number, as API likely expects a numeric type for currency.
+    cod_amount: Number(order.total),
     note: `Order from E-commerce Manager App. Total items: ${order.items.length}`,
   };
 
@@ -171,7 +151,7 @@ const sendToSteadfast = async (order: Order, apiKey: string, secretKey: string) 
   }
 };
 
-const sendToPathao = async (order: Order, accessToken: string, storeId: string) => {
+const sendToPathao = async (order, accessToken, storeId) => {
   const PATHAO_API_URL = 'https://api-hermes.pathao.com/aladdin/api/v1/orders';
   
   const payload = {
@@ -179,9 +159,9 @@ const sendToPathao = async (order: Order, accessToken: string, storeId: string) 
     recipient_name: order.customerName,
     recipient_address: order.shippingAddress,
     recipient_phone: order.customerPhone,
-    amount_to_collect: order.total, // Reverted to number, as API likely expects a numeric type.
+    amount_to_collect: Number(order.total),
     item_quantity: order.items.reduce((sum, item) => sum + item.quantity, 0),
-    item_weight: 0.5, // Default weight in kg, adjust as needed
+    item_weight: 0.5,
     item_description: order.items.map(i => i.name).join(', '),
     merchant_order_id: order.id,
   };
@@ -237,11 +217,7 @@ const sendToPathao = async (order: Order, accessToken: string, storeId: string) 
 };
 
 
-export const sendToCourier = async (
-    order: Order,
-    courier: Courier,
-    config: any
-): Promise<{ success: boolean; trackingId: string; message: string }> => {
+export const sendToCourier = async (order, courier, config) => {
   console.log(`Sending order #${order.id} to ${courier} via live API.`);
   
   if (courier === Courier.Steadfast) {

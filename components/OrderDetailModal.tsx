@@ -175,7 +175,7 @@ const OrderDetailModal: React.FC<OrderDetailModalProps> = ({ order, onClose, onU
               <p><strong>Phone:</strong> {order.customerPhone}</p>
               
               <div className="mt-4 p-3 bg-gray-50 dark:bg-gray-700/50 rounded-md text-sm">
-                  <h4 className="font-semibold mb-2">Courier Delivery History</h4>
+                  <h4 className="font-semibold mb-2">Courier Delivery History <span className="text-xs font-normal text-gray-500 dark:text-gray-400">(Demo)</span></h4>
                   <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">Customer's delivery record based on their phone number.</p>
                   
                   <div className="space-y-3">
