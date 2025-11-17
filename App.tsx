@@ -32,7 +32,11 @@ const App: React.FC = () => {
       setOrders(fetchedOrders);
     } catch (err) {
       if (err instanceof Error) {
-        setError(err.message);
+        if (err.message.toLowerCase().includes('failed to fetch')) {
+           setError("Could not connect to your site. This is often due to a CORS policy on your server. Please ensure the provided plugin is active and your server allows requests from this domain. Also, verify the Site URL is correct (e.g., starts with https://).");
+        } else {
+           setError(err.message);
+        }
       } else {
         setError('An unknown error occurred while fetching orders.');
       }
