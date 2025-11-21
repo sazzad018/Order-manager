@@ -1,12 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import { Order, OrderStatus, CustomerHistory, Courier } from '../types';
-import { fetchCourierCustomerHistory, sendToCourier } from '../services/orderService';
+import { fetchCustomerHistory, sendToCourier, fetchSteadfastGlobalStats } from '../services/orderService';
 
 interface OrderDetailModalProps {
   order: Order;
   onClose: () => void;
   onUpdateStatus: (orderId: string, status: OrderStatus) => void;
   onOrderBooked: (orderId: string, courier: Courier, trackingId: string) => void;
+  siteUrl: string | null;
+  authHeader: string | null;
 }
 
 const statusColors: { [key in OrderStatus]: string } = {
@@ -26,16 +28,21 @@ const Spinner: React.FC<{className?: string}> = ({className}) => (
 );
 
 
-const OrderDetailModal: React.FC<OrderDetailModalProps> = ({ order, onClose, onUpdateStatus, onOrderBooked }) => {
+const OrderDetailModal: React.FC<OrderDetailModalProps> = ({ order, onClose, onUpdateStatus, onOrderBooked, siteUrl, authHeader }) => {
   const [history, setHistory] = useState<CustomerHistory | null>(null);
   const [isHistoryLoading, setIsHistoryLoading] = useState(false);
   const [historyError, setHistoryError] = useState<string | null>(null);
-  const [historyCourier, setHistoryCourier] = useState<Courier>(Courier.Steadfast);
+  const [copySuccess, setCopySuccess] = useState('');
   
   // State for the courier booking feature
   const [courierStatus, setCourierStatus] = useState<'idle' | 'sending' | 'sent' | 'error'>('idle');
   const [courierMessage, setCourierMessage] = useState('');
   const [selectedCourier, setSelectedCourier] = useState<Courier>(Courier.Steadfast);
+  
+  // State for Global History API Check
+  const [globalStats, setGlobalStats] = useState<any | null>(null);
+  const [isGlobalLoading, setIsGlobalLoading] = useState(false);
+  const [globalError, setGlobalError] = useState<string | null>(null);
   
   // Courier API Config State
   const [steadfastApiKey, setSteadfastApiKey] = useState<string|null>(null);
@@ -52,20 +59,17 @@ const OrderDetailModal: React.FC<OrderDetailModalProps> = ({ order, onClose, onU
   }, []);
 
   const handleViewHistory = async () => {
-    setIsHistoryLoading(true);
-    setHistoryError(null);
-    setHistory(null); // Clear previous history on new request
-
-    let courierConfig = {};
-    if (historyCourier === Courier.Steadfast) {
-      courierConfig = { apiKey: steadfastApiKey, secretKey: steadfastSecretKey };
-    } else { // Pathao
-      // For history check, we might only need the token, but we pass the whole config for flexibility
-      courierConfig = { apiKey: pathaoApiKey, storeId: pathaoStoreId };
+    if (!siteUrl || !authHeader) {
+        setHistoryError("Connection details missing.");
+        return;
     }
 
+    setIsHistoryLoading(true);
+    setHistoryError(null);
+    setHistory(null); 
+
     try {
-      const historyData = await fetchCourierCustomerHistory(order.customerPhone, historyCourier, courierConfig);
+      const historyData = await fetchCustomerHistory(order.customerPhone, siteUrl, authHeader);
       setHistory(historyData);
     } catch (error) {
       setHistoryError(error instanceof Error ? error.message : 'Could not load customer history.');
@@ -73,6 +77,42 @@ const OrderDetailModal: React.FC<OrderDetailModalProps> = ({ order, onClose, onU
     } finally {
       setIsHistoryLoading(false);
     }
+  };
+  
+  const handleCheckSteadfastGlobal = async () => {
+      if (!steadfastApiKey || !steadfastSecretKey) {
+          setGlobalError("Please add Steadfast API keys in Settings first.");
+          return;
+      }
+      
+      setIsGlobalLoading(true);
+      setGlobalError(null);
+      setGlobalStats(null);
+      
+      try {
+          const data = await fetchSteadfastGlobalStats(order.customerPhone, steadfastApiKey, steadfastSecretKey);
+          
+          // Calculate stats from parcel list
+          if (Array.isArray(data)) {
+             let delivered = 0;
+             let cancelled = 0;
+             let total = data.length;
+             
+             data.forEach((p: any) => {
+                 const s = p.status?.toLowerCase() || '';
+                 if (s.includes('delivered')) delivered++;
+                 if (s.includes('cancelled') || s.includes('return')) cancelled++;
+             });
+             
+             setGlobalStats({ total, delivered, cancelled });
+          } else {
+             setGlobalStats({ total: 0, delivered: 0, cancelled: 0 });
+          }
+      } catch (error) {
+          setGlobalError(error instanceof Error ? error.message : "Failed to fetch API data.");
+      } finally {
+          setIsGlobalLoading(false);
+      }
   };
   
   const handleSendToCourier = async () => {
@@ -105,6 +145,13 @@ const OrderDetailModal: React.FC<OrderDetailModalProps> = ({ order, onClose, onU
     }
   };
 
+  const handleExternalCheck = (url: string, name: string) => {
+      navigator.clipboard.writeText(order.customerPhone);
+      setCopySuccess(`Phone copied! Opening ${name}...`);
+      setTimeout(() => setCopySuccess(''), 3000);
+      window.open(url, '_blank');
+  };
+
   const isBooked = !!order.courier;
   
   const isBookingConfigMissing = selectedCourier === Courier.Steadfast
@@ -114,10 +161,6 @@ const OrderDetailModal: React.FC<OrderDetailModalProps> = ({ order, onClose, onU
   const missingBookingConfigMessage = selectedCourier === Courier.Steadfast
     ? "Please add an API Key and Secret Key for Steadfast in the Settings."
     : "Please add an Access Token and Store ID for Pathao in the Settings.";
-
-  const isHistoryConfigMissing = historyCourier === Courier.Steadfast
-    ? !steadfastApiKey || !steadfastSecretKey
-    : !pathaoApiKey; // Pathao history check might only need the access token
 
   return (
     <div 
@@ -156,43 +199,103 @@ const OrderDetailModal: React.FC<OrderDetailModalProps> = ({ order, onClose, onU
               <h3 className="font-semibold text-lg mb-2 text-gray-800 dark:text-gray-200">Customer Details</h3>
               <p><strong>Name:</strong> {order.customerName}</p>
               <p><strong>Email:</strong> {order.customerEmail}</p>
-              <p><strong>Phone:</strong> {order.customerPhone}</p>
+              <div className="flex items-center gap-2">
+                 <p><strong>Phone:</strong> {order.customerPhone}</p>
+                 <button 
+                    onClick={() => {navigator.clipboard.writeText(order.customerPhone); setCopySuccess('Copied!'); setTimeout(()=>setCopySuccess(''), 2000);}}
+                    className="text-xs text-blue-500 hover:underline"
+                 >
+                    Copy
+                 </button>
+              </div>
               
-              <div className="mt-4 p-3 bg-gray-50 dark:bg-gray-700/50 rounded-md text-sm">
-                  <h4 className="font-semibold mb-2">Courier Delivery History</h4>
-                  <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">Check customer's record with a courier using their phone number.</p>
+              {/* Store History Section */}
+              <div className="mt-4 p-3 bg-gray-50 dark:bg-gray-700/50 rounded-md text-sm border border-gray-200 dark:border-gray-600">
+                  <h4 className="font-semibold mb-2 text-gray-900 dark:text-white">My Store History</h4>
+                  <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">
+                      Shows orders placed by this customer on <strong>your</strong> website.
+                  </p>
                   <div className="flex items-center gap-2">
-                     <select
-                        value={historyCourier}
-                        onChange={(e) => setHistoryCourier(e.target.value as Courier)}
-                        className="block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 text-sm dark:bg-gray-900/50 dark:border-gray-600 dark:text-white"
-                        disabled={isHistoryLoading}
-                     >
-                        {Object.values(Courier).map(c => <option key={c} value={c}>{c}</option>)}
-                    </select>
                     <button 
                         onClick={handleViewHistory} 
-                        className="px-4 py-2 text-sm font-medium text-indigo-600 border border-indigo-600 rounded-md hover:bg-indigo-50 dark:text-indigo-400 dark:border-indigo-400 dark:hover:bg-gray-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                        disabled={isHistoryLoading || isHistoryConfigMissing}
+                        className="w-full px-4 py-2 text-sm font-medium text-indigo-600 border border-indigo-600 rounded-md hover:bg-indigo-50 dark:text-indigo-400 dark:border-indigo-400 dark:hover:bg-gray-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                        disabled={isHistoryLoading}
                     >
-                      {isHistoryLoading ? <Spinner className="text-indigo-500"/> : 'Check'}
+                      {isHistoryLoading ? <Spinner className="text-indigo-500 mx-auto"/> : 'Check Local History'}
                     </button>
                   </div>
-                  {isHistoryConfigMissing && (
-                    <p className="text-xs text-yellow-600 dark:text-yellow-400 mt-2">
-                        API details for {historyCourier} are missing in Settings.
-                    </p>
-                  )}
                   {historyError && <p className="text-sm text-red-500 mt-2">{historyError}</p>}
                   {history && (
                     <div className="mt-3 grid grid-cols-2 gap-x-4 gap-y-1">
-                      <p>Total Parcels: <span className="font-bold">{history.totalParcels}</span></p>
+                      <p>Total Orders: <span className="font-bold">{history.totalParcels}</span></p>
                       <p>Delivered: <span className="font-bold text-green-500">{history.delivered}</span></p>
                       <p>Pending: <span className="font-bold text-yellow-500">{history.pending}</span></p>
-                      <p>Returned: <span className="font-bold text-red-500">{history.returned}</span></p>
+                      <p>Returned/Failed: <span className="font-bold text-red-500">{history.returned}</span></p>
                     </div>
                   )}
               </div>
+
+              {/* External Tools Section */}
+              <div className="mt-4 p-3 bg-yellow-50 dark:bg-yellow-900/10 rounded-md text-sm border border-yellow-200 dark:border-yellow-800/30">
+                  <h4 className="font-semibold mb-2 text-gray-900 dark:text-white">Global Courier History</h4>
+                  <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">
+                      Checks Steadfast Network for this number.
+                  </p>
+                  
+                  {/* API Check Button */}
+                  <button
+                      onClick={handleCheckSteadfastGlobal}
+                      disabled={isGlobalLoading}
+                      className="w-full mb-3 px-3 py-2 text-sm font-medium bg-yellow-600 text-white rounded hover:bg-yellow-700 transition-colors disabled:opacity-50"
+                  >
+                      {isGlobalLoading ? <Spinner className="text-white mx-auto" /> : 'Check Steadfast API'}
+                  </button>
+                  
+                   {globalError && (
+                      <div className="mb-3 text-xs bg-red-100 dark:bg-red-900/30 text-red-800 dark:text-red-300 p-2 rounded">
+                         {globalError}
+                      </div>
+                   )}
+                   
+                   {globalStats && (
+                      <div className="mb-3 grid grid-cols-3 gap-1 text-center bg-white dark:bg-gray-800 p-2 rounded border border-gray-200 dark:border-gray-700">
+                          <div>
+                             <div className="font-bold text-gray-800 dark:text-white">{globalStats.total}</div>
+                             <div className="text-xs text-gray-500">Total</div>
+                          </div>
+                          <div>
+                             <div className="font-bold text-green-600">{globalStats.delivered}</div>
+                             <div className="text-xs text-gray-500">Delivered</div>
+                          </div>
+                           <div>
+                             <div className="font-bold text-red-600">{globalStats.cancelled}</div>
+                             <div className="text-xs text-gray-500">Return</div>
+                          </div>
+                      </div>
+                   )}
+
+                  <div className="border-t border-yellow-200 dark:border-yellow-800/30 pt-2 mt-2">
+                      <p className="text-xs text-gray-500 dark:text-gray-400 mb-2 text-center">
+                          Or check manually via Portal:
+                      </p>
+                      <div className="grid grid-cols-2 gap-2">
+                          <button
+                              onClick={() => handleExternalCheck('https://portal.steadfast.com.bd/', 'Steadfast')}
+                              className="px-3 py-2 text-xs font-medium bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
+                          >
+                              Open Steadfast
+                          </button>
+                          <button
+                              onClick={() => handleExternalCheck('https://merchant.pathao.com/', 'Pathao')}
+                              className="px-3 py-2 text-xs font-medium bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
+                          >
+                              Open Pathao
+                          </button>
+                      </div>
+                  </div>
+                  {copySuccess && <p className="text-xs text-green-600 mt-1 font-medium text-center">{copySuccess}</p>}
+              </div>
+
             </div>
             <div>
               <h3 className="font-semibold text-lg mb-2 text-gray-800 dark:text-gray-200">Shipping Address</h3>

@@ -157,35 +157,102 @@ export const updateOrderStatus = async (orderId: string, status: OrderStatus, si
 };
 
 
-// --- COURIER HISTORY AND INTEGRATION (Unchanged) ---
+// --- HISTORY (REAL DATA FROM WOOCOMMERCE) ---
 
-const fetchSteadfastHistory = async (phone: string, apiKey: string, secretKey: string): Promise<CustomerHistory> => {
-    await new Promise(resolve => setTimeout(resolve, 1500)); 
-    const hash = phone.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
-    if (hash % 5 === 0) throw new Error("Customer phone not found in Steadfast records.");
-    return { totalParcels: 10, delivered: 8, returned: 1, pending: 1 };
-};
+// Fetches order history from the connected WooCommerce store based on phone number
+export const fetchCustomerHistory = async (phone: string, siteUrl: string, authHeader: string): Promise<CustomerHistory> => {
+    if (!phone) throw new Error("No phone number provided for history check.");
+    
+    checkMixedContent(siteUrl);
+    const baseUrl = siteUrl.replace(/\/+$/, "");
+    // WooCommerce API allows searching by phone, name, etc.
+    const url = `${baseUrl}/wp-json/wc/v3/orders?search=${encodeURIComponent(phone)}&per_page=50`;
 
-const fetchPathaoHistory = async (phone: string, accessToken: string): Promise<CustomerHistory> => {
-    await new Promise(resolve => setTimeout(resolve, 1500));
-    const hash = phone.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
-    if (hash % 6 === 0) throw new Error("Customer phone not found in Pathao records.");
-    return { totalParcels: 5, delivered: 4, returned: 0, pending: 1 };
-};
-
-export const fetchCourierCustomerHistory = async (phone: string, courier: Courier, config: any): Promise<CustomerHistory> => {
-    if (courier === Courier.Steadfast) {
-        if (!config.apiKey || !config.secretKey) throw new Error('Steadfast API Key and Secret Key are required.');
-        return await fetchSteadfastHistory(phone, config.apiKey, config.secretKey);
+    let response: Response;
+    try {
+        response = await fetch(url, {
+            headers: { 
+                'Authorization': authHeader,
+                'Content-Type': 'application/json'
+            }
+        });
+    } catch (error) {
+        throw new Error("Failed to connect to store for history check.");
     }
-    if (courier === Courier.Pathao) {
-        if (!config.apiKey) throw new Error('Pathao Access Token is required.');
-        return await fetchPathaoHistory(phone, config.apiKey);
+
+    if (!response.ok) {
+        throw new Error(`Failed to fetch history (Status: ${response.status})`);
     }
-    throw new Error(`History check for "${courier}" is not configured.`);
+
+    const data = await response.json();
+    
+    // Calculate stats
+    let total = 0;
+    let delivered = 0;
+    let returned = 0;
+    let pending = 0;
+
+    if (Array.isArray(data)) {
+        total = data.length;
+        data.forEach((order: any) => {
+            const s = order.status;
+            if (s === 'completed') delivered++;
+            else if (s === 'failed' || s === 'cancelled' || s === 'refunded') returned++;
+            else if (s === 'pending' || s === 'processing' || s === 'on-hold') pending++;
+        });
+    }
+
+    return {
+        totalParcels: total,
+        delivered,
+        returned,
+        pending
+    };
 };
 
-// --- REAL COURIER INTEGRATION CODE (Unchanged) ---
+
+// --- REAL COURIER INTEGRATION CODE ---
+
+// Fetch Global History from Steadfast API
+export const fetchSteadfastGlobalStats = async (phone: string, apiKey: string, secretKey: string) => {
+    if (!apiKey || !secretKey) throw new Error("Steadfast API Key and Secret Key are required.");
+    
+    // NOTE: This assumes the API allows searching parcels by mobile number.
+    // Standard endpoint often is usually /parcels or similar with query params.
+    const url = `https://portal.steadfast.com.bd/api/v1/parcels?mobile=${phone}`;
+
+    try {
+        const response = await fetch(url, {
+            method: 'GET',
+            headers: {
+                'Api-Key': apiKey,
+                'Secret-Key': secretKey,
+                'Content-Type': 'application/json',
+                'Accept': 'application/json'
+            }
+        });
+
+        if (!response.ok) {
+            const text = await response.text();
+            console.error("Steadfast API Error Response:", text);
+            throw new Error(`Steadfast API Error: ${response.status}`);
+        }
+
+        const data = await response.json();
+        
+        // Depending on API structure, data might be inside `data` property
+        const parcels = Array.isArray(data) ? data : (data.data || []);
+        
+        return parcels;
+    } catch (error) {
+        console.error("Steadfast Global Fetch Error:", error);
+        const msg = error instanceof Error ? error.message : "Unknown error";
+        if (msg.includes("Failed to fetch")) {
+             throw new Error("Connection Failed: The browser blocked the request (CORS) or the internet is down. Please use the 'Open Steadfast' button to check manually.");
+        }
+        throw error;
+    }
+}
 
 const sendToSteadfast = async (order: Order, apiKey: string, secretKey: string) => {
   const STEADFAST_API_URL = 'https://portal.steadfast.com.bd/api/v1/create_order';

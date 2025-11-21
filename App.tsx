@@ -210,6 +210,8 @@ const App: React.FC = () => {
           onClose={handleCloseModal}
           onUpdateStatus={handleUpdateStatus}
           onOrderBooked={handleOrderBooked}
+          siteUrl={siteUrl}
+          authHeader={authHeader}
         />
       )}
     </div>
