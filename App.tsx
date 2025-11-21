@@ -19,16 +19,19 @@ const App: React.FC = () => {
   const [isLoggedIn, setIsLoggedIn] = useState<boolean>(() => !!localStorage.getItem('isLoggedIn'));
   const [isConnected, setIsConnected] = useState<boolean>(() => !!localStorage.getItem('siteUrl'));
   const [siteUrl, setSiteUrl] = useState<string | null>(() => localStorage.getItem('siteUrl'));
-  const [apiKey, setApiKey] = useState<string | null>(() => localStorage.getItem('apiKey'));
+  
+  // We now store the Basic Auth header string instead of a simple API key
+  const [authHeader, setAuthHeader] = useState<string | null>(() => localStorage.getItem('authHeader'));
+  
   const [showConnectionWizard, setShowConnectionWizard] = useState<boolean>(false);
   const [showSettings, setShowSettings] = useState<boolean>(false);
 
   const loadOrders = useCallback(async () => {
-    if (!isConnected || !siteUrl || !apiKey) return;
+    if (!isConnected || !siteUrl || !authHeader) return;
     try {
       setIsLoading(true);
       setError(null);
-      const fetchedOrders = await fetchOrders(siteUrl, apiKey);
+      const fetchedOrders = await fetchOrders(siteUrl, authHeader);
       setOrders(fetchedOrders);
     } catch (err) {
       // Display the specific error message from the service
@@ -38,13 +41,12 @@ const App: React.FC = () => {
     } finally {
       setIsLoading(false);
     }
-  }, [isConnected, siteUrl, apiKey]);
+  }, [isConnected, siteUrl, authHeader]);
 
   useEffect(() => {
     if (isLoggedIn && isConnected) {
       loadOrders();
     } else if(isLoggedIn && !isConnected) {
-      // No need to set showConnectionWizard here, let the user decide
       setIsLoading(false);
     } else {
       setIsLoading(false);
@@ -54,24 +56,23 @@ const App: React.FC = () => {
   const handleLogin = () => {
     setIsLoggedIn(true);
     localStorage.setItem('isLoggedIn', 'true');
-    // Don't automatically show the wizard, let the InfoPanel handle the CTA
   };
   
   const handleLogout = () => {
     setIsLoggedIn(false);
     setIsConnected(false);
     setSiteUrl(null);
-    setApiKey(null);
+    setAuthHeader(null);
     setOrders([]);
     localStorage.clear();
   };
 
-  const handleConnect = (newSiteUrl: string, newApiKey: string) => {
+  const handleConnect = (newSiteUrl: string, newAuthHeader: string) => {
     setSiteUrl(newSiteUrl);
-    setApiKey(newApiKey);
+    setAuthHeader(newAuthHeader);
     setIsConnected(true);
     localStorage.setItem('siteUrl', newSiteUrl);
-    localStorage.setItem('apiKey', newApiKey);
+    localStorage.setItem('authHeader', newAuthHeader);
     setShowConnectionWizard(false);
   };
 
@@ -84,7 +85,7 @@ const App: React.FC = () => {
   };
 
   const handleUpdateStatus = async (orderId: string, status: OrderStatus) => {
-    if (!siteUrl || !apiKey) return;
+    if (!siteUrl || !authHeader) return;
     try {
       setOrders(prevOrders =>
         prevOrders.map(order =>
@@ -95,7 +96,7 @@ const App: React.FC = () => {
         setSelectedOrder(prev => prev ? {...prev, status} : null);
       }
       
-      await updateOrderStatus(orderId, status, siteUrl, apiKey);
+      await updateOrderStatus(orderId, status, siteUrl, authHeader);
     } catch (err) {
       // Revert optimistic update if failed
       loadOrders();
@@ -163,10 +164,10 @@ const App: React.FC = () => {
                     <div className="text-sm text-left bg-white dark:bg-gray-800 p-4 rounded border border-red-100 dark:border-red-800/50 shadow-sm">
                         <p className="font-bold text-gray-700 dark:text-gray-300 mb-2">Troubleshooting Checklist:</p>
                         <ul className="list-disc pl-5 space-y-1 text-gray-600 dark:text-gray-400">
-                            <li><strong>Permalinks:</strong> Go to WordPress Dashboard {'>'} Settings {'>'} Permalinks and click "Save Changes". (Fixes 404 errors)</li>
-                            <li><strong>API Key:</strong> Ensure the key matches exactly what is shown in the WordPress plugin page.</li>
-                            <li><strong>Mixed Content:</strong> If your WordPress site uses <code>http://</code>, it cannot connect to this <code>https://</code> app. You must enable SSL on your WordPress site.</li>
-                            <li><strong>CORS:</strong> Ensure security plugins (like Wordfence) aren't blocking the REST API.</li>
+                            <li><strong>Credentials:</strong> Double check your WordPress Username and Application Password.</li>
+                            <li><strong>Permalinks:</strong> Go to WordPress Dashboard {'>'} Settings {'>'} Permalinks and click "Save Changes".</li>
+                            <li><strong>CORS:</strong> Since you aren't using the helper plugin, you might need to install a "WP CORS" plugin on your site to allow this app to connect.</li>
+                            <li><strong>SSL/HTTPS:</strong> Your site must be HTTPS.</li>
                         </ul>
                     </div>
                     
@@ -181,7 +182,7 @@ const App: React.FC = () => {
                             onClick={() => setShowConnectionWizard(true)}
                             className="px-6 py-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 font-medium rounded-md hover:bg-gray-50 dark:hover:bg-gray-600 transition-colors shadow-sm"
                         >
-                            Re-enter Settings
+                            Re-enter Credentials
                         </button>
                     </div>
                 </div>
