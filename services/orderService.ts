@@ -1,77 +1,106 @@
 import { Order, OrderStatus, CustomerHistory, Courier } from '../types';
 
+// Helper to detect Mixed Content (HTTPS app trying to access HTTP api)
+const checkMixedContent = (siteUrl: string) => {
+    if (typeof window !== 'undefined' && window.location.protocol === 'https:' && siteUrl.startsWith('http:')) {
+        throw new Error(`Security Error: Mixed Content.\n\nThis app is running on HTTPS (Secure), but your site is HTTP (Insecure).\nBrowsers block this connection for your safety.\n\nSolution: You must enable SSL (HTTPS) on your WordPress site to use it with this app.`);
+    }
+};
+
 // This function makes a network request to the WordPress site to fetch orders.
 export const fetchOrders = async (siteUrl: string, apiKey: string): Promise<Order[]> => {
   // Ensure no trailing slash
   const baseUrl = siteUrl.replace(/\/+$/, "");
-  const endpoint = `${baseUrl}/wp-json/order-manager/v1/orders`;
+  
+  checkMixedContent(baseUrl);
+
+  // STRATEGY:
+  // 1. Try the "Pretty Permalink" URL (e.g. /wp-json/...)
+  // 2. If that fails (404 or Network Error), try the "Plain Permalink" fallback (e.g. /?rest_route=...)
+  // This solves issues where users haven't saved Permalinks in WP settings.
+
+  const prettyUrl = `${baseUrl}/wp-json/order-manager/v1/orders`;
+  const fallbackUrl = `${baseUrl}/?rest_route=/order-manager/v1/orders`;
+
+  let response: Response;
+  let primaryError: any = null;
 
   try {
-    const response = await fetch(endpoint, {
+    response = await fetch(prettyUrl, {
       headers: { 'Authorization': `Bearer ${apiKey}` }
     });
-
-    const contentType = response.headers.get('content-type');
-
-    // Check if the response is actually JSON. If not (e.g. HTML), throw a specific error.
-    // This catches cases where WP returns a standard 404 HTML page because Permalinks aren't saved.
-    if (!contentType || !contentType.includes('application/json')) {
-        const text = await response.text().catch(() => '');
-        
-        if (response.status === 404) {
-             throw new Error(`Endpoint not found (404). \n\nCRITICAL FIX: Go to your WordPress Dashboard > Settings > Permalinks and click "Save Changes". This is required to enable the API.`);
-        }
-
-        if (text.includes('<!DOCTYPE html>') || text.includes('<html')) {
-            throw new Error(`Connection Error: The site returned an HTML page instead of data (Status: ${response.status}). \n\nCommon Causes:\n1. Permalinks not saved (Go to Settings > Permalinks > Save Changes).\n2. Security Plugin (e.g., Wordfence) blocking the API.\n3. Maintenance Mode is enabled.`);
-        }
-        
-        throw new Error(`Invalid response received from server (Status: ${response.status}).`);
-    }
-
-    if (!response.ok) {
-      let errorMessage = `Server returned status: ${response.status} ${response.statusText}`;
-      
-      if (response.status === 401 || response.status === 403) {
-          throw new Error(`Authorization failed (${response.status}). Please check that your API Key matches exactly.`);
-      }
-
-      // Try to parse JSON error from WordPress
-      try {
-        const errorData = await response.json();
-        if (errorData.message) errorMessage = errorData.message;
-        else if (errorData.code) errorMessage = `Error code: ${errorData.code}`;
-      } catch (e) {
-        // Ignore json parse error here as we handled non-json content-type above
-      }
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    return data;
-  } catch (error) {
-    console.error("Fetch Orders Error:", error);
     
-    if (error instanceof Error) {
-        // Handle Network Errors (CORS, Mixed Content, Offline)
-        // Browsers often just say "Failed to fetch" for CORS or Mixed Content errors.
-        if (error.message === 'Failed to fetch' || error.message.toLowerCase().includes('network')) {
-            throw new Error(`Network Connection Failed.\n\nMost likely causes:\n1. Mixed Content: Your WordPress is HTTP but this app is HTTPS.\n2. CORS: A security plugin is blocking the connection.\n3. Invalid Site URL (Check for typos).`);
-        }
-        throw error; 
+    // If we get a 404, it's likely a Permalink issue, so throw to trigger fallback.
+    if (response.status === 404) {
+        throw new Error('Permalink 404');
     }
-    throw new Error('An unknown error occurred while fetching orders.');
+  } catch (error) {
+    console.warn("Primary connection failed, attempting fallback URL...", error);
+    primaryError = error;
+    
+    try {
+        // Try the fallback URL which works even if Permalinks are set to "Plain"
+        response = await fetch(fallbackUrl, {
+            headers: { 'Authorization': `Bearer ${apiKey}` }
+        });
+    } catch (fallbackError) {
+        console.error("Fallback connection also failed.", fallbackError);
+        
+        const errToReport = primaryError instanceof Error ? primaryError : new Error('Unknown error');
+        
+        // Handle "Failed to fetch" (Network/CORS) explicitly
+        if (errToReport.message === 'Failed to fetch' || errToReport.message.toLowerCase().includes('network')) {
+            if (window.location.protocol === 'https:' && siteUrl.startsWith('http:')) {
+                 throw new Error("Mixed Content Error: You are trying to connect an HTTP (insecure) WordPress site to this HTTPS (secure) app. This is blocked by your browser. Please enable SSL on your WordPress site.");
+            }
+
+            throw new Error(`Connection Blocked (CORS).\n\nYour browser blocked the connection to WordPress.\n\nFIX:\n1. Click 'Re-enter Settings'.\n2. Download the NEW Plugin (v1.2.0).\n3. Delete the old plugin from WordPress and install this new one.\n\n(The new version fixes these blocking issues)`);
+        }
+        throw errToReport;
+    }
   }
+
+  const contentType = response.headers.get('content-type');
+
+  // Check if the response is actually JSON.
+  if (!contentType || !contentType.includes('application/json')) {
+      const text = await response.text().catch(() => '');
+      
+      if (text.includes('<!DOCTYPE html>') || text.includes('<html')) {
+          throw new Error(`Connection Error: The site returned an HTML page instead of data (Status: ${response.status}). \n\nThis usually means:\n1. A security plugin (Wordfence/iThemes) is blocking REST API requests.\n2. The site is in Maintenance Mode.\n3. You are redirected to a login page.`);
+      }
+      
+      throw new Error(`Invalid response received from server (Status: ${response.status}).`);
+  }
+
+  if (!response.ok) {
+    let errorMessage = `Server returned status: ${response.status} ${response.statusText}`;
+    
+    if (response.status === 401 || response.status === 403) {
+        throw new Error(`Authorization failed (${response.status}). Please check that your API Key matches exactly.`);
+    }
+
+    try {
+      const errorData = await response.json();
+      if (errorData.message) errorMessage = errorData.message;
+      else if (errorData.code) errorMessage = `Error code: ${errorData.code}`;
+    } catch (e) {
+      // Ignore
+    }
+    throw new Error(errorMessage);
+  }
+
+  const data = await response.json();
+  return data;
 };
 
 // This function makes a network request to update the order status on the WordPress site.
 export const updateOrderStatus = async (orderId: string, status: OrderStatus, siteUrl: string, apiKey: string): Promise<Order> => {
-  // The PHP plugin expects the lowercase WooCommerce status, not the app's capitalized status.
-  // We need to map it back before sending the update.
+  checkMixedContent(siteUrl);
+
   const statusMap: { [key in OrderStatus]?: string } = {
       [OrderStatus.Pending]: 'pending',
       [OrderStatus.Processing]: 'processing',
-      // WooCommerce doesn't have a "Shipped" status by default. Mapping to "completed" is a common practice.
       [OrderStatus.Shipped]: 'completed',
       [OrderStatus.Delivered]: 'completed',
       [OrderStatus.Cancelled]: 'cancelled',
@@ -85,15 +114,29 @@ export const updateOrderStatus = async (orderId: string, status: OrderStatus, si
 
   const baseUrl = siteUrl.replace(/\/+$/, "");
   
-  try {
-      const response = await fetch(`${baseUrl}/wp-json/order-manager/v1/orders/${orderId}`, {
+  // We use the same fallback logic here for consistency
+  const prettyUrl = `${baseUrl}/wp-json/order-manager/v1/orders/${orderId}`;
+  const fallbackUrl = `${baseUrl}/?rest_route=/order-manager/v1/orders/${orderId}`;
+  
+  const makeRequest = async (url: string) => {
+      return fetch(url, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${apiKey}`,
           'Content-Type': 'application/json'
         },
-        body: JSON.stringify({ status: wcStatus }) // Send the lowercase WooCommerce status
+        body: JSON.stringify({ status: wcStatus })
       });
+  };
+
+  try {
+      let response = await makeRequest(prettyUrl);
+      
+      // If 404 on POST, it's almost certainly permalinks. Try fallback.
+      if (response.status === 404) {
+           console.log("Update failed on pretty URL (404), trying fallback...");
+           response = await makeRequest(fallbackUrl);
+      }
       
       if (!response.ok) {
          try {
@@ -114,16 +157,11 @@ export const updateOrderStatus = async (orderId: string, status: OrderStatus, si
 
 // --- COURIER HISTORY AND INTEGRATION ---
 
-/**
- * MOCK: Simulates fetching customer delivery history from Steadfast using a phone number.
- * NOTE: This is a placeholder. The actual API endpoint and response structure may differ.
- */
+// MOCK: Simulates fetching customer delivery history from Steadfast
 const fetchSteadfastHistory = async (phone: string, apiKey: string, secretKey: string): Promise<CustomerHistory> => {
     console.log(`MOCK: Fetching Steadfast history for phone: ${phone} with API Key: ${apiKey}`);
-    // Simulate network delay
     await new Promise(resolve => setTimeout(resolve, 1500)); 
 
-    // Mock response logic for demonstration.
     const hash = phone.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
     if (hash % 5 === 0) {
         throw new Error("Customer phone not found in Steadfast records.");
@@ -136,16 +174,11 @@ const fetchSteadfastHistory = async (phone: string, apiKey: string, secretKey: s
     return { totalParcels, delivered, returned, pending };
 };
 
-/**
- * MOCK: Simulates fetching customer delivery history from Pathao using a phone number.
- * NOTE: This is a placeholder. The actual API endpoint and response structure may differ.
- */
+// MOCK: Simulates fetching customer delivery history from Pathao
 const fetchPathaoHistory = async (phone: string, accessToken: string): Promise<CustomerHistory> => {
     console.log(`MOCK: Fetching Pathao history for phone: ${phone} with Token: ${accessToken}`);
-    // Simulate network delay
     await new Promise(resolve => setTimeout(resolve, 1500));
 
-    // Mock response logic for demonstration.
     const hash = phone.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
      if (hash % 6 === 0) {
         throw new Error("Customer phone not found in Pathao records.");
@@ -166,7 +199,6 @@ export const fetchCourierCustomerHistory = async (phone: string, courier: Courie
     }
     if (courier === Courier.Pathao) {
         if (!config.apiKey) throw new Error('Pathao Access Token is required.');
-        // Assuming config.apiKey is the access token for this call
         return await fetchPathaoHistory(phone, config.apiKey);
     }
     throw new Error(`History check for "${courier}" is not configured.`);
@@ -183,7 +215,7 @@ const sendToSteadfast = async (order: Order, apiKey: string, secretKey: string) 
     recipient_name: order.customerName,
     recipient_address: order.shippingAddress,
     recipient_phone: order.customerPhone,
-    cod_amount: String(order.total), // Sending as string to avoid potential type issues on the server
+    cod_amount: String(order.total),
     note: `Order from E-commerce Manager App. Total items: ${order.items.length}`,
   };
 
@@ -244,9 +276,9 @@ const sendToPathao = async (order: Order, accessToken: string, storeId: string) 
     recipient_name: order.customerName,
     recipient_address: order.shippingAddress,
     recipient_phone: order.customerPhone,
-    amount_to_collect: String(order.total), // Sending as string to avoid potential type issues
+    amount_to_collect: String(order.total),
     item_quantity: order.items.reduce((sum, item) => sum + item.quantity, 0),
-    item_weight: 0.5, // Default weight in kg, adjust as needed
+    item_weight: 0.5,
     item_description: order.items.map(i => i.name).join(', '),
     merchant_order_id: order.id,
   };
