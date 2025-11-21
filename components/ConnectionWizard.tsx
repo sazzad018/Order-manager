@@ -9,7 +9,7 @@ const pluginCode = `<?php
 /**
  * Plugin Name:       Order Manager Connector
  * Description:       Connects your WooCommerce store to the E-commerce Order Manager application.
- * Version:           1.0.8
+ * Version:           1.0.6
  * Author:            AI Assistant
  * License:           GPL-2.0-or-later
  * License URI:       https://www.gnu.org/licenses/gpl-2.0.html
@@ -179,18 +179,26 @@ function omc_format_order_data($order) {
         'failed'     => 'Cancelled',
     ];
     $order_status = $order->get_status();
-    
-    // Use WooCommerce's built-in formatted address function for reliability.
-    $shipping_address_html = $order->get_formatted_shipping_address();
-    if ( ! $shipping_address_html ) {
-        $shipping_address_html = $order->get_formatted_billing_address();
+
+    // Get shipping address, fallback to billing address, and format for plain text display.
+    $address_obj = $order->get_address('shipping');
+    if (empty(array_filter($address_obj))) {
+        $address_obj = $order->get_address('billing');
     }
-    
-    // Convert <br/> tags to newlines and strip any other HTML for clean text display.
-    $shipping_address_text = preg_replace('/<br\\s*?\/?>/i', "\n", $shipping_address_html);
-    $shipping_address_text = wp_strip_all_tags($shipping_address_text);
-    
-    if (empty(trim($shipping_address_text))) {
+
+    $address_components = [
+        $address_obj['first_name'] . ' ' . $address_obj['last_name'],
+        $address_obj['company'],
+        $address_obj['address_1'],
+        $address_obj['address_2'],
+        trim($address_obj['city'] . ', ' . $address_obj['state'] . ' ' . $address_obj['postcode']),
+        WC()->countries->countries[$address_obj['country']] ?? $address_obj['country']
+    ];
+
+    // Filter out any empty or whitespace-only lines and join them with a newline character.
+    $shipping_address_text = implode("\n", array_filter(array_map('trim', $address_components)));
+
+    if (empty($shipping_address_text)) {
         $shipping_address_text = 'No address provided.';
     }
 
@@ -209,7 +217,7 @@ function omc_format_order_data($order) {
 
 // Callback to get all orders
 function omc_get_orders() {
-    $orders_raw = wc_get_orders(['limit' => -1, 'orderby' => 'date', 'order' => 'DESC']);
+    $orders_raw = wc_get_orders(['limit' => 50, 'orderby' => 'date', 'order' => 'DESC']);
     $response_data = [];
     foreach ($orders_raw as $order) {
         $response_data[] = omc_format_order_data($order);
@@ -318,12 +326,17 @@ const ConnectionWizard: React.FC<ConnectionWizardProps> = ({ onConnect, onClose 
         <div className="p-6 space-y-6">
           <div>
             <h3 className="font-semibold text-lg text-gray-800 dark:text-gray-200">Step 1: Install Our Plugin</h3>
-            <p className="mt-1 text-gray-600 dark:text-gray-400">
-              Download the connector plugin. Then, in your WordPress admin dashboard, go to "Plugins" &gt; "Add New" &gt; "Upload Plugin" and upload the downloaded file. After uploading, click "Activate Plugin".
-            </p>
+            <div className="mt-2 p-4 bg-indigo-50 dark:bg-indigo-900/30 border border-indigo-100 dark:border-indigo-800 rounded-lg text-gray-700 dark:text-gray-300 text-sm space-y-2">
+               <p>1. <strong>Download</strong> the connector plugin below.</p>
+               <p>2. In your WordPress admin, go to <strong>Plugins &gt; Add New &gt; Upload Plugin</strong> and upload the file.</p>
+               <p>3. Click <strong>Activate Plugin</strong>.</p>
+               <p className="text-red-600 dark:text-red-400 font-bold bg-white dark:bg-gray-800 p-2 rounded border border-red-200 dark:border-red-900/50">
+                 ⚠️ IMPORTANT: After activation, go to Settings &gt; Permalinks and click "Save Changes" (even if you don't change anything). This is required to fix "404 Not Found" connection errors.
+               </p>
+            </div>
             <button 
               onClick={handleDownloadPlugin}
-              className="mt-3 inline-flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white font-semibold rounded-lg hover:bg-indigo-700"
+              className="mt-4 inline-flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white font-semibold rounded-lg hover:bg-indigo-700 transition-colors"
             >
              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-5 h-5">
                 <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5M16.5 12 12 16.5m0 0L7.5 12m4.5 4.5V3" />
@@ -335,7 +348,7 @@ const ConnectionWizard: React.FC<ConnectionWizardProps> = ({ onConnect, onClose 
           <div>
             <h3 className="font-semibold text-lg text-gray-800 dark:text-gray-200">Step 2: Enter Connection Details</h3>
             <p className="mt-1 text-gray-600 dark:text-gray-400">
-              After activating the plugin, a new "Order Manager" menu will appear in your WordPress dashboard. Click on it, then copy the Site URL and API Key and paste them below.
+              After activating the plugin, look for the <strong>"Order Manager"</strong> menu in your WordPress dashboard sidebar. Copy the Site URL and API Key displayed there.
             </p>
             <div className="mt-4 space-y-4">
               <div>

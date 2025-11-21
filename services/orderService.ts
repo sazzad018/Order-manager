@@ -2,14 +2,66 @@ import { Order, OrderStatus, CustomerHistory, Courier } from '../types';
 
 // This function makes a network request to the WordPress site to fetch orders.
 export const fetchOrders = async (siteUrl: string, apiKey: string): Promise<Order[]> => {
-  const response = await fetch(`${siteUrl.replace(/\/+$/, "")}/wp-json/order-manager/v1/orders`, {
-    headers: { 'Authorization': `Bearer ${apiKey}` }
-  });
-  if (!response.ok) {
-     throw new Error('Failed to fetch orders. Check URL, API Key, and CORS settings on your WordPress site.');
+  // Ensure no trailing slash
+  const baseUrl = siteUrl.replace(/\/+$/, "");
+  const endpoint = `${baseUrl}/wp-json/order-manager/v1/orders`;
+
+  try {
+    const response = await fetch(endpoint, {
+      headers: { 'Authorization': `Bearer ${apiKey}` }
+    });
+
+    const contentType = response.headers.get('content-type');
+
+    // Check if the response is actually JSON. If not (e.g. HTML), throw a specific error.
+    // This catches cases where WP returns a standard 404 HTML page because Permalinks aren't saved.
+    if (!contentType || !contentType.includes('application/json')) {
+        const text = await response.text().catch(() => '');
+        
+        if (response.status === 404) {
+             throw new Error(`Endpoint not found (404). \n\nCRITICAL FIX: Go to your WordPress Dashboard > Settings > Permalinks and click "Save Changes". This is required to enable the API.`);
+        }
+
+        if (text.includes('<!DOCTYPE html>') || text.includes('<html')) {
+            throw new Error(`Connection Error: The site returned an HTML page instead of data (Status: ${response.status}). \n\nCommon Causes:\n1. Permalinks not saved (Go to Settings > Permalinks > Save Changes).\n2. Security Plugin (e.g., Wordfence) blocking the API.\n3. Maintenance Mode is enabled.`);
+        }
+        
+        throw new Error(`Invalid response received from server (Status: ${response.status}).`);
+    }
+
+    if (!response.ok) {
+      let errorMessage = `Server returned status: ${response.status} ${response.statusText}`;
+      
+      if (response.status === 401 || response.status === 403) {
+          throw new Error(`Authorization failed (${response.status}). Please check that your API Key matches exactly.`);
+      }
+
+      // Try to parse JSON error from WordPress
+      try {
+        const errorData = await response.json();
+        if (errorData.message) errorMessage = errorData.message;
+        else if (errorData.code) errorMessage = `Error code: ${errorData.code}`;
+      } catch (e) {
+        // Ignore json parse error here as we handled non-json content-type above
+      }
+      throw new Error(errorMessage);
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Fetch Orders Error:", error);
+    
+    if (error instanceof Error) {
+        // Handle Network Errors (CORS, Mixed Content, Offline)
+        // Browsers often just say "Failed to fetch" for CORS or Mixed Content errors.
+        if (error.message === 'Failed to fetch' || error.message.toLowerCase().includes('network')) {
+            throw new Error(`Network Connection Failed.\n\nMost likely causes:\n1. Mixed Content: Your WordPress is HTTP but this app is HTTPS.\n2. CORS: A security plugin is blocking the connection.\n3. Invalid Site URL (Check for typos).`);
+        }
+        throw error; 
+    }
+    throw new Error('An unknown error occurred while fetching orders.');
   }
-  const data = await response.json();
-  return data;
 };
 
 // This function makes a network request to update the order status on the WordPress site.
@@ -31,25 +83,32 @@ export const updateOrderStatus = async (orderId: string, status: OrderStatus, si
     throw new Error(`Unknown status mapping for: ${status}`);
   }
 
-  const response = await fetch(`${siteUrl.replace(/\/+$/, "")}/wp-json/order-manager/v1/orders/${orderId}`, {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${apiKey}`,
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify({ status: wcStatus }) // Send the lowercase WooCommerce status
-  });
+  const baseUrl = siteUrl.replace(/\/+$/, "");
   
-  if (!response.ok) {
-     try {
-        const errorData = await response.json();
-        throw new Error(errorData.message || 'Failed to update order status.');
-     } catch (e) {
-        throw new Error('Failed to update order status. The server returned an invalid response.');
-     }
+  try {
+      const response = await fetch(`${baseUrl}/wp-json/order-manager/v1/orders/${orderId}`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${apiKey}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ status: wcStatus }) // Send the lowercase WooCommerce status
+      });
+      
+      if (!response.ok) {
+         try {
+            const errorData = await response.json();
+            throw new Error(errorData.message || `Failed to update order status (${response.status}).`);
+         } catch (e) {
+            throw new Error(`Failed to update order status. Server returned: ${response.status} ${response.statusText}`);
+         }
+      }
+      const data = await response.json();
+      return data;
+  } catch (error) {
+      console.error("Update Status Error:", error);
+      throw error instanceof Error ? error : new Error("An unexpected error occurred during status update.");
   }
-  const data = await response.json();
-  return data;
 };
 
 
@@ -66,6 +125,9 @@ const fetchSteadfastHistory = async (phone: string, apiKey: string, secretKey: s
 
     // Mock response logic for demonstration.
     const hash = phone.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
+    if (hash % 5 === 0) {
+        throw new Error("Customer phone not found in Steadfast records.");
+    }
     const delivered = hash % 10;
     const returned = Math.floor(hash % 5 / 2);
     const pending = Math.floor(hash % 3 / 2);
@@ -85,6 +147,9 @@ const fetchPathaoHistory = async (phone: string, accessToken: string): Promise<C
 
     // Mock response logic for demonstration.
     const hash = phone.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
+     if (hash % 6 === 0) {
+        throw new Error("Customer phone not found in Pathao records.");
+    }
     const delivered = hash % 12;
     const returned = Math.floor(hash % 4 / 2);
     const pending = Math.floor(hash % 2);
@@ -116,9 +181,9 @@ const sendToSteadfast = async (order: Order, apiKey: string, secretKey: string) 
   const payload = {
     invoice: order.id,
     recipient_name: order.customerName,
-    recipient_address: order.shippingAddress.replace(/\n/g, ', '), // Replace newlines to prevent API errors
+    recipient_address: order.shippingAddress,
     recipient_phone: order.customerPhone,
-    cod_amount: order.total, // Reverted to number, as API likely expects a numeric type for currency.
+    cod_amount: String(order.total), // Sending as string to avoid potential type issues on the server
     note: `Order from E-commerce Manager App. Total items: ${order.items.length}`,
   };
 
@@ -179,7 +244,7 @@ const sendToPathao = async (order: Order, accessToken: string, storeId: string) 
     recipient_name: order.customerName,
     recipient_address: order.shippingAddress,
     recipient_phone: order.customerPhone,
-    amount_to_collect: order.total, // Reverted to number, as API likely expects a numeric type.
+    amount_to_collect: String(order.total), // Sending as string to avoid potential type issues
     item_quantity: order.items.reduce((sum, item) => sum + item.quantity, 0),
     item_weight: 0.5, // Default weight in kg, adjust as needed
     item_description: order.items.map(i => i.name).join(', '),

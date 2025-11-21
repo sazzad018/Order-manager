@@ -31,15 +31,9 @@ const App: React.FC = () => {
       const fetchedOrders = await fetchOrders(siteUrl, apiKey);
       setOrders(fetchedOrders);
     } catch (err) {
-      if (err instanceof Error) {
-        if (err.message.toLowerCase().includes('failed to fetch')) {
-           setError("Could not connect to your site. This is often due to a CORS policy on your server. Please ensure the provided plugin is active and your server allows requests from this domain. Also, verify the Site URL is correct (e.g., starts with https://).");
-        } else {
-           setError(err.message);
-        }
-      } else {
-        setError('An unknown error occurred while fetching orders.');
-      }
+      // Display the specific error message from the service
+      const message = err instanceof Error ? err.message : 'Failed to fetch orders.';
+      setError(message);
       console.error(err);
     } finally {
       setIsLoading(false);
@@ -103,8 +97,10 @@ const App: React.FC = () => {
       
       await updateOrderStatus(orderId, status, siteUrl, apiKey);
     } catch (err) {
-      setError('Failed to update order status.');
-      loadOrders(); // Revert on failure
+      // Revert optimistic update if failed
+      loadOrders();
+      const msg = err instanceof Error ? err.message : 'Failed to update order status.';
+      alert(msg);
     }
   };
 
@@ -135,9 +131,20 @@ const App: React.FC = () => {
         
         {isConnected ? (
           <div className="mt-8 bg-white dark:bg-gray-800 shadow-lg rounded-xl overflow-hidden">
-            <div className="p-6 border-b border-gray-200 dark:border-gray-700">
-              <h2 className="text-2xl font-bold text-gray-900 dark:text-white">Incoming Orders</h2>
-              <p className="mt-1 text-gray-500 dark:text-gray-400">Manage and track all customer orders.</p>
+            <div className="p-6 border-b border-gray-200 dark:border-gray-700 flex justify-between items-center">
+              <div>
+                <h2 className="text-2xl font-bold text-gray-900 dark:text-white">Incoming Orders</h2>
+                <p className="mt-1 text-gray-500 dark:text-gray-400">Manage and track all customer orders.</p>
+              </div>
+              <button 
+                onClick={loadOrders} 
+                className="p-2 rounded-full hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
+                title="Refresh Orders"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                </svg>
+              </button>
             </div>
             
             {isLoading ? (
@@ -146,28 +153,37 @@ const App: React.FC = () => {
               </div>
             ) : error ? (
               <div className="text-center py-12 px-6">
-                <div className="bg-red-50 dark:bg-gray-800 border border-red-200 dark:border-red-900/50 p-6 rounded-lg max-w-lg mx-auto shadow-md">
-                  <div className="flex flex-col items-center justify-center">
-                    <svg xmlns="http://www.w3.org/2000/svg" className="h-12 w-12 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                <div className="bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 p-6 rounded-lg inline-block max-w-2xl mx-auto border border-red-100 dark:border-red-800">
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-12 w-12 mx-auto mb-4 text-red-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
                     </svg>
-                    <h3 className="mt-4 text-xl font-bold text-gray-800 dark:text-red-400">Connection Failed</h3>
-                    <p className="mt-2 text-gray-600 dark:text-red-300/80 mb-6">{error}</p>
-                    <div className="flex justify-center gap-4">
-                      <button
-                        onClick={loadOrders}
-                        className="px-5 py-2 bg-indigo-600 text-white font-semibold rounded-lg shadow-md hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 dark:focus:ring-offset-gray-800 transition-colors"
-                      >
-                        Retry
-                      </button>
-                      <button
-                        onClick={() => setShowSettings(true)}
-                        className="px-5 py-2 bg-white text-gray-800 font-semibold rounded-lg border border-gray-300 hover:bg-gray-100 dark:bg-gray-700 dark:text-gray-200 dark:hover:bg-gray-600 dark:border-gray-600 focus:outline-none focus:ring-2 focus:ring-gray-400 focus:ring-offset-2 dark:focus:ring-offset-gray-800 transition-colors"
-                      >
-                        Check Settings
-                      </button>
+                    <h3 className="text-lg font-bold mb-2 text-red-700 dark:text-red-300">Connection Failed</h3>
+                    <p className="text-base mb-4 whitespace-pre-wrap">{error}</p>
+                    
+                    <div className="text-sm text-left bg-white dark:bg-gray-800 p-4 rounded border border-red-100 dark:border-red-800/50 shadow-sm">
+                        <p className="font-bold text-gray-700 dark:text-gray-300 mb-2">Troubleshooting Checklist:</p>
+                        <ul className="list-disc pl-5 space-y-1 text-gray-600 dark:text-gray-400">
+                            <li><strong>Permalinks:</strong> Go to WordPress Dashboard {'>'} Settings {'>'} Permalinks and click "Save Changes". (Fixes 404 errors)</li>
+                            <li><strong>API Key:</strong> Ensure the key matches exactly what is shown in the WordPress plugin page.</li>
+                            <li><strong>Mixed Content:</strong> If your WordPress site uses <code>http://</code>, it cannot connect to this <code>https://</code> app. You must enable SSL on your WordPress site.</li>
+                            <li><strong>CORS:</strong> Ensure security plugins (like Wordfence) aren't blocking the REST API.</li>
+                        </ul>
                     </div>
-                  </div>
+                    
+                    <div className="mt-6 flex gap-4 justify-center">
+                        <button 
+                            onClick={loadOrders}
+                            className="px-6 py-2 bg-red-600 hover:bg-red-700 text-white font-medium rounded-md transition-colors shadow-sm"
+                        >
+                            Retry Connection
+                        </button>
+                        <button 
+                            onClick={() => setShowConnectionWizard(true)}
+                            className="px-6 py-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 font-medium rounded-md hover:bg-gray-50 dark:hover:bg-gray-600 transition-colors shadow-sm"
+                        >
+                            Re-enter Settings
+                        </button>
+                    </div>
                 </div>
               </div>
             ) : (
